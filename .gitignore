@@ -1,0 +1,7 @@
+*.zip
+/P4Search
+Binaries/
+Intermediate/
+NoCompile/
+log.txt
+.DS_Store

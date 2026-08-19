@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "P4Search",
+	"Description": "Search, preview, and pull assets from a Helix Core depot indexed by P4Search directly into your Unreal project.",
+	"Category": "Other",
+	"CreatedBy": "Perforce Software, Inc.",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"PlatformAllowList": [ "Win64", "Mac"],
+	"Modules": [
+		{
+			"Name": "P4Search",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "Interchange",
+			"Enabled": true
+		}
+	]
+}
