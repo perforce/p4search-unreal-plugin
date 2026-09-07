@@ -1,7 +1,7 @@
 #!/bin/zsh
-# Usage: build.sh [unreal-engine-version]  (e.g. build.sh 5.6; defaults to 5.5)
+# Usage: build.sh [unreal-engine-version]  (e.g. build.sh 5.6; defaults to 5.8)
 set -e
-ue_version="${1:-5.5}"
+ue_version="${1:-5.8}"
 engine_root="/Users/Shared/Epic Games/UE_$ue_version"
 
 if [[ ! -d "$engine_root" ]]; then
@@ -17,6 +17,7 @@ echo **** PREP ****
 pushd $cwd
 rm -rf NoCompile
 rm -rf P4Search
+rm -rf P4Search_ZipStage
 popd
 
 echo **** BUILD ****
@@ -31,28 +32,37 @@ pushd $cwd
 rm -rf NoCompile
 pushd P4Search
 rm -rf Intermediate
-rm -rf Source
 popd
 popd
 
 echo **** STAMP VERSION ****
 python3 $cwd/../stamp-version.py $cwd/../Version $cwd/P4Search/P4Search.uplugin
 
-echo **** PACKAGE ****
-pushd $cwd
-rm -f P4Search_Mac.zip
-tar -c -a -f P4Search_Mac.zip P4Search
-# cp README.md P4Search_README.md
-popd
-
 echo **** DEPLOY ****
+# Deploys the Source-intact copy (not the zip below) -- a local C++ game project's own Editor
+# target build needs UBT to resolve the P4Search module's rules from source to build the
+# target's makefile at all, even though a precompiled binary already exists.
 pushd ~/P4Search_Plugin
 rm -rf P4Search
-cp $cwd/P4Search_Mac.zip .
-unzip P4Search_Mac.zip
-rm P4Search_Mac.zip
 popd
+cp -r $cwd/P4Search ~/P4Search_Plugin/P4Search
 
 rm -rf "$engine_root/Engine/Plugins/P4Search"
 cp -r ~/P4Search_Plugin/P4Search "$engine_root/Engine/Plugins/P4Search"
 ls -la "$engine_root/Engine/Plugins" | grep P4Search
+
+echo **** PACKAGE ****
+# Builds the distributable zip from a separate Source-stripped copy, so the local deploy above
+# keeps Source while this stays a binary-only package.
+pushd $cwd
+rm -f P4Search_Mac.zip
+rm -rf P4Search_ZipStage
+mkdir P4Search_ZipStage
+cp -r P4Search P4Search_ZipStage/P4Search
+rm -rf P4Search_ZipStage/P4Search/Source
+pushd P4Search_ZipStage
+tar -c -a -f $cwd/P4Search_Mac.zip P4Search
+popd
+rm -rf P4Search_ZipStage
+# cp README.md P4Search_README.md
+popd

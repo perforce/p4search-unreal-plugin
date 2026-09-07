@@ -5,6 +5,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Styling/SlateTypes.h"
+#include "Animation/CurveSequence.h"
 #include "P4SearchStyle.h"
 
 class SImage;
@@ -37,12 +38,23 @@ public:
 		, _DepotFile(TEXT(""))
 		, _Rev(0)
 		, _bIsHead(true)
+		, _bSupportsAddToProject(true)
+		, _AppearIndex(0)
 	{}
 		SLATE_ARGUMENT(FString,      FileName)
 		SLATE_ARGUMENT(FString,      DepotFile)
 		SLATE_ARGUMENT(int32,        Rev)
 		SLATE_ARGUMENT(bool,         bIsHead)
 		SLATE_ARGUMENT(FButtonStyle, ActionButtonStyle)
+
+		// Hides the "Add to Project" button for extensions no registered UFactory can import
+		// in this project (see FP4SearchModule::IsExtensionSupportedForImport) -- offering a
+		// button that would just silently do nothing is worse than not offering it at all.
+		SLATE_ARGUMENT(bool,         bSupportsAddToProject)
+
+		// Position of this card within the current page's results (0-based) -- staggers the
+		// appear-animation so cards cascade in one after another instead of all moving at once.
+		SLATE_ARGUMENT(int32,        AppearIndex)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -61,6 +73,23 @@ public:
 	// horizontal position across the card (left edge = first frame, right edge = last frame)
 	// rather than auto-playing on a timer.
 	virtual FReply OnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
+
+	// Drives the appear-animation's fade-in. RenderOpacity (unlike RenderTransform) is a plain
+	// float with no TAttribute/builder binding, so it has to be pushed via SetRenderOpacity()
+	// each frame instead of read declaratively -- only does anything while AppearAnim is
+	// actually playing.
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
+
+	// Slate keeps ticking every card regardless of scroll position (SScrollBox only clips
+	// painting, it doesn't stop off-screen children from ticking), so playing the appear
+	// animation unconditionally at construction time means cards below the fold finish
+	// animating in the background before the user ever scrolls down to see them -- by the
+	// time they're actually visible, nothing appears to happen. OnPaint() gets MyCullingRect
+	// (this card's real, currently-visible clip region), which Tick() doesn't -- used here to
+	// defer the very first Play() until this card is genuinely on-screen for the first time.
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle,
+		bool bParentEnabled) const override;
 
 	/** Called once the async thumbnail response arrives */
 	void SetThumbnailBrush(TSharedPtr<FSlateBrush> Brush);
@@ -171,10 +200,22 @@ private:
 	bool bIsDownloading = false;
 	TOptional<float> DownloadProgressPercent;
 
+	// Played once, forward only, the first time this card is actually painted on-screen (see
+	// OnPaint()) -- every card slides up from just below its final position while fading in,
+	// giving new search results a bit of arrival motion instead of just popping into the
+	// grid. Mutable: triggered from OnPaint(), which the base class declares const.
+	mutable FCurveSequence AppearAnim;
+	FCurveHandle   AppearCurve;
+
+	// Guards AppearAnim.Play() to only ever fire once per card, the first time OnPaint()
+	// finds it actually visible (not fully clipped by a scrolled-past viewport).
+	mutable bool bHasTriggeredAppearAnim = false;
+
 	FString CardFileName;
 	FString CardDepotFile;
 	int32   CardRev = 0;
 	bool    CardIsHead = true;
+	bool    bCardSupportsAddToProject = true;
 
 	// Shared (not raw) ownership — FP4SearchDragDropOp keeps its own TSharedPtr to whichever
 	// brush was current when a drag started, so a new search's ClearResults() (which empties

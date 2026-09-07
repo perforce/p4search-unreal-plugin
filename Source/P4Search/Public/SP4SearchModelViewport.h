@@ -25,7 +25,12 @@ public:
 	void SetPreviewMesh(UStaticMesh* Mesh);
 
 	// SEditorViewport interface
+	// SEditorViewport::MakeViewportToolbar() became `final` in UE 5.7, returning nullptr by
+	// default -- the same no-toolbar behavior this override existed to provide, so on 5.7+ the
+	// base's own default already does the job and this override would fail to compile.
+#if !(ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7))
 	virtual TSharedPtr<SWidget> MakeViewportToolbar() override;
+#endif
 	virtual TSharedRef<FEditorViewportClient> MakeEditorViewportClient() override;
 	virtual void BindCommands() override;
 	virtual void OnFocusViewportToSelection() override;

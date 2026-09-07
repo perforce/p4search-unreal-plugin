@@ -36,7 +36,34 @@ namespace P4SearchCore
 		SearchQuery += TEXT("+model: asset");
 		if (!bAllTypes)
 		{
-			SearchQuery += FString::Printf(TEXT(" +ext:%s"), *Ext.ToLower());
+			// "ALL3D"/"ALL2D" are sidebar pseudo-options, not real extensions (see
+			// AllThreeDOption/AllTwoDOption in P4Search.h) -- each expands to every extension in
+			// that category, space-separated, matching the DSL grammar's `ext:` rule (ext :
+			// 'ext' COLON (value)+), which ORs multiple values. Keep this pair in sync with
+			// P4Search.cpp's ThreeDExtensions set and the 2D group's exclusion list.
+			FString ExtToken;
+			bool bMultiValueExt = false;
+			if (Ext == TEXT("ALL3D"))
+			{
+				ExtToken = TEXT("fbx obj glb usd abc");
+				bMultiValueExt = true;
+			}
+			else if (Ext == TEXT("ALL2D"))
+			{
+				ExtToken = TEXT("jpeg png bmp");
+				bMultiValueExt = true;
+			}
+			else
+			{
+				ExtToken = Ext.ToLower();
+			}
+			// Every other clause in this query is "+"-prefixed (required) -- "+ext:" with
+			// multiple values would require the same file to match every one of them
+			// simultaneously, which none ever can. Dropping "+" here instead makes this the
+			// query's only should-type clause, and minimumShouldMatch(1) on the compiled
+			// query already makes "at least one should clause matches" required overall, so
+			// this still behaves as a required OR-of-extensions, not an optional filter.
+			SearchQuery += FString::Printf(TEXT(" %sext:%s"), bMultiValueExt ? TEXT("") : TEXT("+"), *ExtToken);
 		}
 		if (!SearchDetected.IsEmpty() && SearchDetected != TEXT("*"))
 		{

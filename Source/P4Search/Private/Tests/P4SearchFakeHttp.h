@@ -27,7 +27,14 @@ public:
 	virtual int32 GetResponseCode() const override { return ResponseCode; }
 	virtual FString GetContentAsString() const override { return Body; }
 
+	// IHttpBase::GetURL()'s return type changed from FString (UE 5.5) to const FString&
+	// (UE 5.6+) -- overriding with a fixed value-vs-reference return type isn't covariant
+	// either way, so this has to track whichever the engine currently declares.
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+	virtual const FString& GetURL() const override { static const FString Empty; return Empty; }
+#else
 	virtual FString GetURL() const override { return FString(); }
+#endif
 	virtual const FString& GetEffectiveURL() const override { static const FString Empty; return Empty; }
 	virtual EHttpRequestStatus::Type GetStatus() const override { return EHttpRequestStatus::Succeeded; }
 	virtual EHttpFailureReason GetFailureReason() const override { return EHttpFailureReason::None; }
@@ -49,6 +56,22 @@ public:
 	virtual FString GetContentType() const override { return GetHeader(TEXT("Content-Type")); }
 	virtual uint64 GetContentLength() const override { return static_cast<uint64>(Content.Num()); }
 	virtual const TArray<uint8>& GetContent() const override { return Content; }
+
+	// IHttpResponse gained this pure virtual in UE 5.6+ (absent from 5.5's interface, so it
+	// can't be declared unconditionally) -- Content is already the UTF8-encoded bytes of Body.
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+	virtual FUtf8StringView GetContentAsUtf8StringView() const override
+	{
+		return FUtf8StringView(reinterpret_cast<const UTF8CHAR*>(Content.GetData()), Content.Num());
+	}
+#endif
+
+	// IHttpResponse gained this pure virtual in UE 5.8+ (absent before, so it can't be
+	// declared unconditionally). Returns a copy rather than moving Content out, so GetContent()
+	// stays valid if called both before and after.
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8)
+	virtual TArray<uint8> TakeContent() override { return Content; }
+#endif
 
 private:
 	int32 ResponseCode;
@@ -72,7 +95,12 @@ public:
 	FString CapturedBodyString;
 	TArray<uint8> CapturedBodyBytes;
 
+	// See FP4SearchFakeHttpResponse::GetURL's comment -- same UE 5.5 vs 5.6+ signature split.
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+	virtual const FString& GetURL() const override { return CapturedURL; }
+#else
 	virtual FString GetURL() const override { return CapturedURL; }
+#endif
 	virtual const FString& GetEffectiveURL() const override { return CapturedURL; }
 	virtual EHttpRequestStatus::Type GetStatus() const override
 	{
@@ -146,8 +174,19 @@ public:
 	}
 	virtual void ProcessRequestUntilComplete() override { ProcessRequest(); }
 
+	// IHttpRequest gained these pure virtuals in UE 5.7+ (absent before, so they can't be
+	// declared unconditionally) -- captured but otherwise unused, same as the other Set*/Get*
+	// pairs above.
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7)
+	virtual void SetPriority(EHttpRequestPriority InPriority) override { Priority = InPriority; }
+	virtual EHttpRequestPriority GetPriority() const override { return Priority; }
+#endif
+
 private:
 	bool bProcessed = false;
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7)
+	EHttpRequestPriority Priority = EHttpRequestPriority::Normal;
+#endif
 	FHttpRequestCompleteDelegate CompleteDelegate;
 	FHttpRequestProgressDelegate64 ProgressDelegate;
 	FHttpRequestWillRetryDelegate WillRetryDelegate;

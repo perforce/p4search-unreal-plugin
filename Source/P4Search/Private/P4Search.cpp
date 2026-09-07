@@ -50,12 +50,14 @@
 #include "Widgets/Notifications/SProgressBar.h"
 #include "ToolMenus.h"
 #include "Interfaces/IHttpRequest.h"
+#include "SP4SearchAnimatedButton.h"
 #include "Interfaces/IHttpResponse.h"
 #include "JsonObjectConverter.h"
 #include "Serialization/JsonWriter.h"
 #include "Misc/ConfigCacheIni.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
+#include "Factories/Factory.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
@@ -351,11 +353,16 @@ void FP4SearchModule::StartupModule()
 	FSlateApplication::Get().OnApplicationPreInputKeyDownListener().AddRaw(this, &FP4SearchModule::OnGlobalKeyDown);
 	FCoreDelegates::OnEnginePreExit.AddRaw(this, &FP4SearchModule::OnEnginePreExit);
 
-	for (const TCHAR* Ext : { TEXT("*"), TEXT("FBX"), TEXT("OBJ"), TEXT("GLB"), TEXT("USD"), TEXT("ABC"), TEXT("UASSET"), TEXT("JPEG"), TEXT("PNG") })
+	for (const TCHAR* Ext : { TEXT("*"), TEXT("FBX"), TEXT("OBJ"), TEXT("GLB"), TEXT("USD"), TEXT("ABC"), TEXT("UASSET"), TEXT("JPEG"), TEXT("PNG"), TEXT("BMP") })
 	{
 		ExtensionOptions.Add(MakeShareable(new FString(Ext)));
 	}
-	SelectedExtension = ExtensionOptions[0];
+	SelectedExtension = ExtensionOptions[1]; // "FBX" -- default filter, not "*" (All Assets)
+
+	// Sentinel values recognized by P4SearchCore::BuildSearchDslQuery, which expands each to
+	// every extension in that category -- see its own comment for the sync-with-this-file note.
+	AllThreeDOption = MakeShareable(new FString(TEXT("ALL3D")));
+	AllTwoDOption   = MakeShareable(new FString(TEXT("ALL2D")));
 
 	for (const TCHAR* Size : { TEXT("10"), TEXT("20"), TEXT("50"), TEXT("100") })
 	{
@@ -439,9 +446,6 @@ void FP4SearchModule::StartupModule()
 	// 10px card/panel radius would visibly break this shape, not modernize it.
 	ToggleTrackBrush = MakeUnique<FSlateRoundedBoxBrush>(FStyleColors::White, 9.0f);
 	ToggleThumbBrush = MakeUnique<FSlateRoundedBoxBrush>(FStyleColors::White, 7.0f);
-
-	// ── Slide-in panel background — flat fill plus a thin outline for a bit of elevation ──
-	PanelElevationBrush = MakeUnique<FSlateRoundedBoxBrush>(FStyleColors::Panel, FStyleColors::Recessed, 1.0f);
 
 	// ── Sidebar file-type row selected-state pill ──
 	FileTypeRowBrush = MakeUnique<FSlateRoundedBoxBrush>(FStyleColors::White, FP4SearchStyle::CornerRadius);
@@ -575,6 +579,11 @@ void FP4SearchModule::ShutdownModule()
 		FTSTicker::GetCoreTicker().RemoveTicker(SearchDebounceTickerHandle);
 	}
 
+	if (NarrowLayoutTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(NarrowLayoutTickerHandle);
+	}
+
 	for (const FTSTicker::FDelegateHandle& Handle : PendingAssetTickers)
 	{
 		FTSTicker::GetCoreTicker().RemoveTicker(Handle);
@@ -674,7 +683,10 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 	// AllAssetsIcon is only non-null for the "*" row — leaf extensions stay text-only.
 	auto MakeExtensionRow = [this, MakeIconLabel](const TSharedPtr<FString>& Opt, const FSlateBrush* AllAssetsIcon = nullptr) -> TSharedRef<SWidget>
 	{
-		const FString DisplayName = (*Opt == TEXT("*")) ? TEXT("ALL ASSETS") : *Opt;
+		const FString DisplayName = (*Opt == TEXT("*"))      ? TEXT("ALL ASSETS")
+			: (*Opt == TEXT("ALL3D")) ? TEXT("All 3D Assets")
+			: (*Opt == TEXT("ALL2D")) ? TEXT("All 2D Assets")
+			: *Opt;
 		return SNew(SBorder)
 			.BorderImage(FileTypeRowBrush.Get())
 			.BorderBackgroundColor_Lambda([this, Opt]() -> FSlateColor
@@ -683,7 +695,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 			})
 			.Padding(0.0f)
 			[
-				SNew(SButton)
+				SNew(SP4SearchAnimatedButton)
 				.ButtonStyle(&IconOnlyButtonStyle)
 				.ContentPadding(FMargin(8.0f, 6.0f))
 				.HAlign(HAlign_Left)
@@ -726,6 +738,11 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 	const FSlateBrush* ThreeDIcon    = FP4SearchStyle::Get().GetBrush("P4Search.Icon.3D");
 	const FSlateBrush* TwoDIcon      = FP4SearchStyle::Get().GetBrush("P4Search.Icon.2D");
 	const FSlateBrush* UnrealIcon    = FP4SearchStyle::Get().GetBrush("P4Search.Icon.Unreal");
+
+	// "All 3D/2D Assets" pseudo-options sit above that group's individual extensions, matching
+	// how "*" (All Assets) sits above every group at the top level.
+	ThreeDGroupList->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(AllThreeDOption) ];
+	TwoDGroupList->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(AllTwoDOption) ];
 
 	for (const TSharedPtr<FString>& Opt : ExtensionOptions)
 	{
@@ -802,6 +819,11 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 		.OnTabClosed_Lambda([this](TSharedRef<SDockTab> /*ClosedTab*/)
 		{
 			HideAssetInfoPanel();
+			if (NarrowLayoutTickerHandle.IsValid())
+			{
+				FTSTicker::GetCoreTicker().RemoveTicker(NarrowLayoutTickerHandle);
+				NarrowLayoutTickerHandle.Reset();
+			}
 		})
 		[
 			SNew(SOverlay)
@@ -819,6 +841,14 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 				.FillWidth(1.0f)
 				[
 				SNew(SVerticalBox)
+				.Visibility_Lambda([this]()
+				{
+					// Collapsed instead of squeezed alongside a Settings panel that's taken
+					// over the whole content width on a narrow dock -- see
+					// IsSettingsPanelTakingOverNarrowLayout().
+					return (IsSettingsPanelTakingOverNarrowLayout() || IsInfoPanelTakingOverNarrowLayout())
+						? EVisibility::Collapsed : EVisibility::Visible;
+				})
 
 				// ── Top bar: logo + title + search + refresh/settings ─────────
 				+ SVerticalBox::Slot()
@@ -842,7 +872,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.VAlign(VAlign_Center)
 						.Padding(0.0f, 0.0f, 16.0f, 0.0f)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&IconOnlyButtonStyle)
 							.ContentPadding(FMargin(0.0f))
 							.ToolTipText(LOCTEXT("FaviconResetTip", "Reset to default search"))
@@ -951,7 +981,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.VAlign(VAlign_Center)
 						.Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 							.ContentPadding(FMargin(8.0f, 4.0f))
 							.Visibility_Lambda([this]() -> EVisibility
@@ -976,7 +1006,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.VAlign(VAlign_Center)
 						.Padding(0.0f, 0.0f, 16.0f, 0.0f)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&SearchButtonStyle)
 							.ContentPadding(FMargin(24.0f, 8.0f))
 							.ForegroundColor(FLinearColor::White)
@@ -995,36 +1025,13 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						]
 
 						// Flexible spacer — absorbs any leftover width beyond the search field's
-						// 840px cap (it has no Max, unlike the search field), pushing Refresh/the
+						// 840px cap (it has no Max, unlike the search field), pushing the
 						// gear-reserved gutter to the right instead of leaving the search field to
 						// stretch past its intended max width.
 						+ SHorizontalBox::Slot()
 						.FillWidth(1.0f)
 						[
 							SNullWidget::NullWidget
-						]
-
-						// Refresh — re-runs the current search
-						+ SHorizontalBox::Slot()
-						.AutoWidth()
-						.VAlign(VAlign_Center)
-						.Padding(0.0f, 0.0f, 12.0f, 0.0f)
-						[
-							SNew(SButton)
-							.ButtonStyle(&IconOnlyButtonStyle)
-							.ContentPadding(FMargin(4.0f))
-							.ToolTipText(LOCTEXT("RefreshTip", "Refresh"))
-							.OnClicked_Lambda([this]() -> FReply
-							{
-								ExecuteSearch();
-								return FReply::Handled();
-							})
-							[
-								SNew(SImage)
-								.Image(FCoreStyle::Get().GetBrush("Icons.Refresh"))
-								.DesiredSizeOverride(FVector2D(17.0f, 17.0f))
-							.ColorAndOpacity(ColLabel)
-							]
 						]
 
 						// Reserved gutter matching the floating Settings gear's footprint (16.0f
@@ -1410,7 +1417,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.VAlign(VAlign_Center)
 						.Padding(0.0f, 0.0f, 8.0f, 0.0f)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 							.ContentPadding(FMargin(12.0f, 4.0f))
 							.OnClicked_Lambda([this]() -> FReply
@@ -1448,7 +1455,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.VAlign(VAlign_Center)
 						.Padding(0.0f, 0.0f, 8.0f, 0.0f)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 							.ContentPadding(FMargin(12.0f, 4.0f))
 							.OnClicked_Lambda([this]() -> FReply
@@ -1470,7 +1477,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.AutoWidth()
 						.VAlign(VAlign_Center)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 							.ContentPadding(FMargin(12.0f, 4.0f))
 							.OnClicked_Lambda([this]() -> FReply
@@ -1602,7 +1609,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 							.HAlign(HAlign_Center)
 							.Padding(0.0f, 16.0f, 0.0f, 0.0f)
 							[
-								SNew(SButton)
+								SNew(SP4SearchAnimatedButton)
 								.ButtonStyle(&SearchButtonStyle)
 								.ContentPadding(FMargin(24.0f, 8.0f))
 								.ForegroundColor(FLinearColor::White)
@@ -1729,7 +1736,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 
 								+ SVerticalBox::Slot().AutoHeight()
 								[
-									SNew(SButton)
+									SNew(SP4SearchAnimatedButton)
 									.ButtonStyle(&SearchButtonStyle)
 									.HAlign(HAlign_Center)
 									.ContentPadding(FMargin(24.0f, 12.0f))
@@ -1757,13 +1764,20 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 				]
 			]
 
-				// ── Pagination strip ───────────────────────────────────────────
+				// ── Pagination strip -- hidden while logged out, since Prev/Next would just
+				// sit there disabled with nothing to page through, and (once this row's own
+				// height is freed up) leaves more room for the inline login form above it in
+				// short/docked layouts. ─────────────────────────────────────────
 				+ SVerticalBox::Slot()
 				.AutoHeight()
 				[
 					SNew(SBorder)
 					.BorderBackgroundColor(BgToolbar)
 					.Padding(12.0f, 8.0f)
+					.Visibility_Lambda([this]()
+					{
+						return bIsLoggedIn ? EVisibility::Visible : EVisibility::Collapsed;
+					})
 					[
 						SNew(SHorizontalBox)
 
@@ -1775,7 +1789,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.AutoWidth()
 						.VAlign(VAlign_Center)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&SearchButtonStyle)
 							.ContentPadding(FMargin(16.0f, 8.0f))
 							.ForegroundColor(FLinearColor::White)
@@ -1822,7 +1836,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.AutoWidth()
 						.VAlign(VAlign_Center)
 						[
-							SNew(SButton)
+							SNew(SP4SearchAnimatedButton)
 							.ButtonStyle(&SearchButtonStyle)
 							.ContentPadding(FMargin(16.0f, 8.0f))
 							.ForegroundColor(FLinearColor::White)
@@ -1907,7 +1921,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 					SAssignNew(InfoPanelContainer, SBox)
 					.WidthOverride_Lambda([this]() -> FOptionalSize
 					{
-						return FOptionalSize(InfoPanelCurve.GetLerp() * InfoPanelWidth);
+						return FOptionalSize(InfoPanelCurve.GetLerp() * GetInfoPanelTargetWidth());
 					})
 					.Visibility_Lambda([this]()
 					{
@@ -1921,7 +1935,10 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 						.Padding(0.0f)
 						[
 							SAssignNew(InfoPanelContent, SBox)
-							.WidthOverride(InfoPanelWidth)
+							.WidthOverride_Lambda([this]() -> FOptionalSize
+							{
+								return FOptionalSize(GetInfoPanelTargetWidth());
+							})
 						]
 					]
 				]
@@ -1933,7 +1950,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 					SAssignNew(SettingsPanelContainer, SBox)
 					.WidthOverride_Lambda([this]() -> FOptionalSize
 					{
-						return FOptionalSize(SettingsPanelCurve.GetLerp() * SettingsPanelWidth);
+						return FOptionalSize(SettingsPanelCurve.GetLerp() * GetSettingsPanelTargetWidth());
 					})
 					.Visibility_Lambda([this]()
 					{
@@ -1943,11 +1960,14 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 					.Clipping(EWidgetClipping::ClipToBoundsAlways)
 					[
 						SNew(SBorder)
-						.BorderImage(PanelElevationBrush.Get())
+						.BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
 						.Padding(0.0f)
 						[
 							SNew(SBox)
-							.WidthOverride(SettingsPanelWidth)
+							.WidthOverride_Lambda([this]() -> FOptionalSize
+							{
+								return FOptionalSize(GetSettingsPanelTargetWidth());
+							})
 							[
 								SNew(SVerticalBox)
 
@@ -1969,7 +1989,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 									.AutoWidth()
 									.VAlign(VAlign_Top)
 									[
-										SNew(SButton)
+										SNew(SP4SearchAnimatedButton)
 										.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 										.ContentPadding(FMargin(8.0f, 4.0f))
 										.ToolTipText(FText::FromString(TEXT("Close")))
@@ -2020,7 +2040,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 									.AutoWidth()
 									.VAlign(VAlign_Center)
 									[
-										SNew(SButton)
+										SNew(SP4SearchAnimatedButton)
 										.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 										.ContentPadding(FMargin(8.0f, 4.0f))
 										.ToolTipText(LOCTEXT("ResetURLTip", "Reset to default server URL"))
@@ -2064,7 +2084,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 									.AutoWidth()
 									.VAlign(VAlign_Center)
 									[
-										SNew(SButton)
+										SNew(SP4SearchAnimatedButton)
 										.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 										.ContentPadding(FMargin(12.0f, 4.0f))
 										.Visibility_Lambda([this]()
@@ -2132,7 +2152,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 			// toolbar row, and toggles the "Settings" slide-in panel. Shifts left by
 			// whatever "More Info"/"Settings" panel width is currently open, so it
 			// doesn't sit on top of (and hide) that panel's own close button. The top
-			// search bar's trailing reserved-gutter spacer (near its Refresh button) is
+			// search bar's trailing reserved-gutter spacer is
 			// sized to match this button's footprint -- keep both in sync.
 			+ SOverlay::Slot()
 			.HAlign(HAlign_Right)
@@ -2140,12 +2160,12 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 			.Padding(TAttribute<FMargin>::CreateLambda([this]() -> FMargin
 			{
 				const float ReservedRight = 16.0f
-					+ (InfoPanelCurve.GetLerp() * InfoPanelWidth)
-					+ (SettingsPanelCurve.GetLerp() * SettingsPanelWidth);
+					+ (InfoPanelCurve.GetLerp() * GetInfoPanelTargetWidth())
+					+ (SettingsPanelCurve.GetLerp() * GetSettingsPanelTargetWidth());
 				return FMargin(16.0f, 12.0f, ReservedRight, 12.0f);
 			}))
 			[
-				SNew(SButton)
+				SNew(SP4SearchAnimatedButton)
 				.ButtonStyle(&GearButtonStyle)
 				.ContentPadding(FMargin(8.0f))
 				.IsFocusable(false) // otherwise the button keeps a visible focus ring after being
@@ -2166,6 +2186,23 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 		];
 
 	MyTab = Tab;
+
+	if (NarrowLayoutTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(NarrowLayoutTickerHandle);
+	}
+	NarrowLayoutTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[this](float) -> bool
+	{
+		TSharedPtr<SDockTab> PinnedTab = MyTab.Pin();
+		if (PinnedTab.IsValid())
+		{
+			MeasuredContentWidth = PinnedTab->GetContent()->GetCachedGeometry().GetLocalSize().X;
+			bSettingsPanelNarrow = MeasuredContentWidth > 0.0f && MeasuredContentWidth < SettingsNarrowThreshold;
+			bInfoPanelNarrow = MeasuredContentWidth > 0.0f && MeasuredContentWidth < InfoPanelNarrowThreshold;
+		}
+		return true;
+	}), 0.1f);
 
 	// Feature 3: Execute search immediately on tab open
 	ExecuteSearch();
@@ -2201,6 +2238,13 @@ void FP4SearchModule::ClearResults()
 	}
 
 	AllCards.Empty();
+
+	// Otherwise "No results found" from the previous search stays visible underneath the
+	// "Searching..." spinner until this new search's own results come back.
+	if (NoResultsPanel.IsValid())
+	{
+		NoResultsPanel->SetVisibility(EVisibility::Collapsed);
+	}
 }
 
 void FP4SearchModule::ResetToDefaultSearch()
@@ -2211,9 +2255,9 @@ void FP4SearchModule::ResetToDefaultSearch()
 	SearchFileSizeToMB.Reset();
 	bHeadOnly = true;
 	SearchDetected = TEXT("*");
-	if (ExtensionOptions.Num() > 0)
+	if (ExtensionOptions.Num() > 1)
 	{
-		SelectedExtension = ExtensionOptions[0]; // "*" — All Assets
+		SelectedExtension = ExtensionOptions[1]; // "FBX" -- matches StartupModule's default
 	}
 	CurrentPage = 0;
 	ExecuteSearch();
@@ -2282,7 +2326,7 @@ TSharedRef<SWidget> FP4SearchModule::BuildCalendarGrid()
 			.WidthOverride(22.0f)
 			.HeightOverride(20.0f)
 			[
-				SNew(SButton)
+				SNew(SP4SearchAnimatedButton)
 				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 				.ContentPadding(FMargin(0.0f))
 				.HAlign(HAlign_Center)
@@ -2313,7 +2357,7 @@ TSharedRef<SWidget> FP4SearchModule::BuildCalendarGrid()
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth()
 		[
-			SNew(SButton)
+			SNew(SP4SearchAnimatedButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 			.OnClicked_Lambda([this]() -> FReply { ShiftCalendarMonth(-1); return FReply::Handled(); })
 			[
@@ -2329,7 +2373,7 @@ TSharedRef<SWidget> FP4SearchModule::BuildCalendarGrid()
 		]
 		+ SHorizontalBox::Slot().AutoWidth()
 		[
-			SNew(SButton)
+			SNew(SP4SearchAnimatedButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 			.OnClicked_Lambda([this]() -> FReply { ShiftCalendarMonth(1); return FReply::Handled(); })
 			[
@@ -2366,7 +2410,7 @@ TSharedRef<SWidget> FP4SearchModule::BuildDateDropdownContent()
 		const FString Value = Preset;
 		Content->AddSlot().AutoHeight().Padding(2.0f, 0.0f, 2.0f, 0.0f)
 		[
-			SNew(SButton)
+			SNew(SP4SearchAnimatedButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 			.HAlign(HAlign_Left)
 			.OnClicked_Lambda([this, Value]() -> FReply
@@ -2424,7 +2468,7 @@ TSharedRef<SWidget> FP4SearchModule::BuildSearchHistoryDropdownContent()
 	{
 		Content->AddSlot().AutoHeight().Padding(2.0f, 0.0f, 2.0f, 0.0f)
 		[
-			SNew(SButton)
+			SNew(SP4SearchAnimatedButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 			.HAlign(HAlign_Left)
 			.OnClicked_Lambda([this, Query]() -> FReply
@@ -2609,6 +2653,7 @@ void FP4SearchModule::ExecuteSearch()
 		};
 		TArray<FPendingThumbnail> PendingThumbnails;
 
+		int32 ResultIndex = 0;
 		for (TSharedPtr<FJsonValue> JsonValue : SearchResults)
 		{
 			TSharedPtr<FJsonObject> Source = JsonValue->AsObject()->GetObjectField(TEXT("_source"));
@@ -2633,7 +2678,10 @@ void FP4SearchModule::ExecuteSearch()
 				.Rev(Rev)
 				.bIsHead(bIsHead)
 				.ActionButtonStyle(SearchButtonStyle)
+				.AppearIndex(ResultIndex)
+				.bSupportsAddToProject(IsExtensionSupportedForImport(FPaths::GetExtension(FileName)))
 			];
+			++ResultIndex;
 
 			TWeakPtr<SP4SearchResultCard> WeakCard = Card;
 			AllCards.Add(WeakCard);
@@ -3058,6 +3106,39 @@ void FP4SearchModule::FetchSceneStats(const FString& DepotFile, int32 Rev)
 			*DepotFile, *SceneStatsDisplayText, *Response->GetContentAsString().Left(300));
 	});
 	Request->ProcessRequest();
+}
+
+bool FP4SearchModule::IsExtensionSupportedForImport(const FString& Extension)
+{
+	static TSet<FString> SupportedExtensions;
+	static bool bScanned = false;
+	if (!bScanned)
+	{
+		bScanned = true;
+		TArray<UClass*> FactoryClasses;
+		GetDerivedClasses(UFactory::StaticClass(), FactoryClasses);
+		for (UClass* FactoryClass : FactoryClasses)
+		{
+			if (FactoryClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				continue;
+			}
+			const UFactory* Factory = FactoryClass->GetDefaultObject<UFactory>();
+			if (!Factory || !Factory->bEditorImport)
+			{
+				continue;
+			}
+			TArray<FString> FactoryExtensions;
+			Factory->GetSupportedFileExtensions(FactoryExtensions);
+			for (const FString& FactoryExtension : FactoryExtensions)
+			{
+				SupportedExtensions.Add(FactoryExtension.ToLower());
+			}
+		}
+	}
+
+	const FString LowerExtension = Extension.ToLower();
+	return LowerExtension == TEXT("uasset") || SupportedExtensions.Contains(LowerExtension);
 }
 
 void FP4SearchModule::AddToProject(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard)
@@ -3634,7 +3715,7 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 
 		if (bCopyOnClick)
 		{
-			ValueWidget = SNew(SButton)
+			ValueWidget = SNew(SP4SearchAnimatedButton)
 				.ButtonStyle(FCoreStyle::Get(), "NoBorder")
 				.ContentPadding(FMargin(0.0f))
 				.HAlign(HAlign_Left)
@@ -3676,11 +3757,18 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 	InfoPanelContent->SetContent(
 		SNew(SBorder)
 		.BorderBackgroundColor(FStyleColors::Transparent)
-		.Padding(24.0f)
+		.Padding(0.0f)
 		[
-			SNew(SVerticalBox)
+			// Scrollable -- when the tab is docked short (e.g. in a bottom-bar layout), this
+			// panel's content (title, 3D viewer, every info row, scene refs/stats) can be taller
+			// than the available height, so it needs to scroll rather than just clip.
+			SNew(SScrollBox)
+			+ SScrollBox::Slot()
+			.Padding(24.0f)
+			[
+				SNew(SVerticalBox)
 
-			+ SVerticalBox::Slot()
+				+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
 				SNew(SHorizontalBox)
@@ -3697,7 +3785,7 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 				.AutoWidth()
 				.VAlign(VAlign_Top)
 				[
-					SNew(SButton)
+					SNew(SP4SearchAnimatedButton)
 					.ButtonStyle(&FilterComboStyle.ComboButtonStyle.ButtonStyle)
 					.ContentPadding(FMargin(8.0f, 4.0f))
 					.ToolTipText(FText::FromString(TEXT("Close")))
@@ -3719,7 +3807,9 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 			.AutoHeight()
 			.Padding(0.0f, 12.0f, 0.0f, 0.0f)
 			[
-				SNew(SButton)
+				SNew(SP4SearchAnimatedButton)
+				.Visibility(IsExtensionSupportedForImport(FPaths::GetExtension(FileName))
+					? EVisibility::Visible : EVisibility::Collapsed)
 				.ButtonStyle(&SearchButtonStyle)
 				.HAlign(HAlign_Center)
 				.ContentPadding(FMargin(16.0f, 8.0f))
@@ -3810,7 +3900,7 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 					.VAlign(VAlign_Top)
 					.Padding(8.0f)
 					[
-						SNew(SButton)
+						SNew(SP4SearchAnimatedButton)
 						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
 						.Visibility_Lambda([this]() -> EVisibility
 						{
@@ -3977,7 +4067,8 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("File Size"), FileSize) ]
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Detected Tags"), DetectedTags.IsEmpty() ? TEXT("No tags found") : DetectedTags) ]
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Scene References"), TAttribute<FString>::CreateLambda([this]() { return SceneRefsDisplayText; })) ]
-			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Scene Stats"), TAttribute<FString>::CreateLambda([this]() { return SceneStatsDisplayText; })) ]
+				+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Scene Stats"), TAttribute<FString>::CreateLambda([this]() { return SceneStatsDisplayText; })) ]
+			]
 		]
 	);
 
@@ -3992,15 +4083,27 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 	const bool bAlreadyOpen = InfoPanelAnim.IsPlaying() || InfoPanelCurve.GetLerp() > 0.0f;
 	if (!bAlreadyOpen)
 	{
+		// Mutually exclusive with "Settings" -- both are docked-right slide-in panels sharing
+		// the same content-area width, so having both open at once would either overlap or (in
+		// narrow layouts) fight over the same full-width takeover.
+		HideSettingsPanel(/*bAnimate=*/false);
 		InfoPanelAnim.Play(InfoPanelContainer.ToSharedRef());
 	}
 }
 
-void FP4SearchModule::HideAssetInfoPanel()
+void FP4SearchModule::HideAssetInfoPanel(bool bAnimate)
 {
 	if (InfoPanelContainer.IsValid())
 	{
-		InfoPanelAnim.PlayReverse(InfoPanelContainer.ToSharedRef());
+		if (bAnimate)
+		{
+			InfoPanelAnim.PlayReverse(InfoPanelContainer.ToSharedRef());
+		}
+		else
+		{
+			InfoPanelAnim.Pause();
+			InfoPanelAnim.JumpToStart();
+		}
 	}
 
 	if (TSharedPtr<SP4SearchResultCard> PreviouslySelected = SelectedResultCard.Pin())
@@ -4044,15 +4147,25 @@ void FP4SearchModule::ToggleSettingsPanel()
 	}
 	else
 	{
+		// Mutually exclusive with "More Info" -- see its own Play() call site for why.
+		HideAssetInfoPanel(/*bAnimate=*/false);
 		SettingsPanelAnim.Play(SettingsPanelContainer.ToSharedRef());
 	}
 }
 
-void FP4SearchModule::HideSettingsPanel()
+void FP4SearchModule::HideSettingsPanel(bool bAnimate)
 {
 	if (SettingsPanelContainer.IsValid())
 	{
-		SettingsPanelAnim.PlayReverse(SettingsPanelContainer.ToSharedRef());
+		if (bAnimate)
+		{
+			SettingsPanelAnim.PlayReverse(SettingsPanelContainer.ToSharedRef());
+		}
+		else
+		{
+			SettingsPanelAnim.Pause();
+			SettingsPanelAnim.JumpToStart();
+		}
 	}
 }
 

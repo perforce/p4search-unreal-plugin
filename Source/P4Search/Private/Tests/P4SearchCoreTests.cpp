@@ -36,6 +36,14 @@ bool FP4SearchBuildSearchDslQueryTest::RunTest(const FString& Parameters)
 		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("FBX"), TEXT(""), TEXT(""), 0, 0, false),
 		TEXT("+model: asset +ext:fbx"));
 
+	TestEqual(TEXT("\"ALL3D\" pseudo-option expands to every 3D extension, unprefixed so ES ORs them"),
+		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("ALL3D"), TEXT(""), TEXT(""), 0, 0, false),
+		TEXT("+model: asset ext:fbx obj glb usd abc"));
+
+	TestEqual(TEXT("\"ALL2D\" pseudo-option expands to every 2D extension, unprefixed so ES ORs them"),
+		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("ALL2D"), TEXT(""), TEXT(""), 0, 0, false),
+		TEXT("+model: asset ext:jpeg png bmp"));
+
 	TestEqual(TEXT("Depot path prefixes the query"),
 		P4SearchCore::BuildSearchDslQuery(TEXT("//depot/foo"), TEXT("*"), TEXT(""), TEXT(""), 0, 0, false),
 		TEXT("+depotPath: //depot/foo +model: asset"));

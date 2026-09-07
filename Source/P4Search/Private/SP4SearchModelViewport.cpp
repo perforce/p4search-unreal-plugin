@@ -18,11 +18,13 @@ void SP4SearchModelViewport::SetPreviewMesh(UStaticMesh* Mesh)
 	}
 }
 
+#if !(ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7))
 TSharedPtr<SWidget> SP4SearchModelViewport::MakeViewportToolbar()
 {
 	// No toolbar — this is a plain preview, not a full asset editor.
 	return nullptr;
 }
+#endif
 
 TSharedRef<FEditorViewportClient> SP4SearchModelViewport::MakeEditorViewportClient()
 {

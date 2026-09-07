@@ -80,9 +80,24 @@ private:
 	void ClearResults();
 	void AddToProject(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
 	void GenerateThumbnail(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
+
+	// AddToProject imports via FAssetToolsModule::ImportAssets, which resolves a UFactory by
+	// file extension -- if no registered factory (including any disabled by this project's
+	// enabled plugins, e.g. USD/Alembic) claims an extension, "Add to Project" would just
+	// silently do nothing useful. Queried live against the factory registry (cached after
+	// the first call) rather than a hardcoded list, so it reflects whatever's actually
+	// enabled in this project. ".uasset" is always supported -- it's copied/registered
+	// directly, never through a UFactory (see AddToProject's bIsUAsset branch).
+	static bool IsExtensionSupportedForImport(const FString& Extension);
 	void ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard, const FString& FileName, const FString& DepotFile,
 		const FString& DetectedTags, int32 Rev, int32 Change, const FString& FileSize, bool bIsHead);
-	void HideAssetInfoPanel();
+
+	// bAnimate=false snaps the panel closed instantly (no slide-out) instead of the normal
+	// animated close -- used when the *other* docked panel is about to open in its place, so
+	// the two don't both have nonzero width at once (siblings in the same row briefly summing
+	// to more than either alone, which read as the newly-opened panel "overshooting" before
+	// snapping down once the old one's close animation finished).
+	void HideAssetInfoPanel(bool bAnimate = true);
 	void FetchModelPreview(const FString& DepotFile, int32 Rev);
 
 	// 2D fallback preview for the "More Info" panel when the asset has no "model" attribute
@@ -90,7 +105,7 @@ private:
 	void FetchInfoPanelPreview(const FString& DepotFile, TWeakPtr<SP4SearchResultCard> WeakCard);
 
 	void ToggleSettingsPanel();
-	void HideSettingsPanel();
+	void HideSettingsPanel(bool bAnimate = true);
 
 	// Escape closes whichever of the More Info / Settings panels is open, but only while
 	// this plugin's tab is the foreground tab — registered application-wide since plain
@@ -156,6 +171,15 @@ private:
 	TArray<TSharedPtr<FString>> ExtensionOptions;
 	TSharedPtr<FString> SelectedExtension;
 
+	// Sidebar pseudo-options ("All 3D Assets" / "All 2D Assets", one per expandable group,
+	// listed above that group's individual extensions) -- not real extensions, so they live
+	// outside ExtensionOptions; BuildSearchDslQuery recognizes their sentinel string values and
+	// expands each to every extension in that category. Held as persistent TSharedPtr<FString>s
+	// (not recreated per-row) since SelectedExtension comparisons are by pointer, matching how
+	// every other row in ExtensionOptions already works.
+	TSharedPtr<FString> AllThreeDOption;
+	TSharedPtr<FString> AllTwoDOption;
+
 	TArray<TSharedPtr<FString>> PageSizeOptions;
 	TSharedPtr<FString> SelectedPageSize;
 
@@ -220,11 +244,6 @@ private:
 	TUniquePtr<FSlateRoundedBoxBrush> ToggleTrackBrush;
 	TUniquePtr<FSlateRoundedBoxBrush> ToggleThumbBrush;
 
-	// Flat-fill + thin outline brush for the "More Info"/"Settings" slide-in panels — gives
-	// them a visible edge against the results grid instead of relying on background color
-	// contrast alone to read as a separate, elevated surface.
-	TUniquePtr<FSlateRoundedBoxBrush> PanelElevationBrush;
-
 	// Sidebar file-type row's selected-state pill — baked-in tint is white so
 	// BorderBackgroundColor (Select when chosen, Transparent otherwise) is the only thing
 	// that actually drives visibility, matching the SP4SearchResultCard outer-ring pattern.
@@ -263,12 +282,49 @@ private:
 	static constexpr float InfoPanelWidth = 640.0f;
 	TWeakPtr<SP4SearchResultCard> SelectedResultCard;  // highlighted while its info is shown
 
+	// Below this measured tab content width, opening "More Info" no longer slides in as a
+	// fixed-640px sibling (there wouldn't be enough room left for search/results) -- instead it
+	// takes over the whole content area like a tab switch, still using the same slide-in
+	// animation. Wider than Settings' own threshold since "More Info" is itself a wider panel.
+	static constexpr float InfoPanelNarrowThreshold = 1000.0f;
+	bool bInfoPanelNarrow = false;
+
+	float GetInfoPanelTargetWidth() const { return bInfoPanelNarrow ? MeasuredContentWidth : InfoPanelWidth; }
+
+	bool IsInfoPanelTakingOverNarrowLayout() const
+	{
+		return bInfoPanelNarrow && (InfoPanelAnim.IsPlaying() || InfoPanelCurve.GetLerp() > 0.0f);
+	}
+
 	// "Settings" panel — same docked-right slide-in pattern as the "More Info" panel
 	// above, triggered by the gear icon floating in the tab's top-right corner.
 	TSharedPtr<SBox> SettingsPanelContainer;
 	FCurveSequence   SettingsPanelAnim;
 	FCurveHandle     SettingsPanelCurve;
 	static constexpr float SettingsPanelWidth = 320.0f;
+
+	// Same narrow-layout takeover as "More Info" above, just with its own (narrower, since
+	// Settings itself is a narrower panel) threshold. There's no live resize event for this
+	// widget tree, so width is sampled periodically by NarrowLayoutTickerHandle instead of
+	// reacting to an actual resize callback -- both this and bInfoPanelNarrow are derived from
+	// the same MeasuredContentWidth sample, just compared against different thresholds.
+	static constexpr float SettingsNarrowThreshold = 700.0f;
+	bool bSettingsPanelNarrow = false;
+	float MeasuredContentWidth = 0.0f;
+	FTSTicker::FDelegateHandle NarrowLayoutTickerHandle;
+
+	// Target width (pre-animation-curve) for the Settings panel's outer container and inner
+	// content column alike -- SettingsPanelWidth normally, or the measured full content width
+	// once bSettingsPanelNarrow kicks in.
+	float GetSettingsPanelTargetWidth() const { return bSettingsPanelNarrow ? MeasuredContentWidth : SettingsPanelWidth; }
+
+	// True for the entire time the Settings panel has any visible presence (opening, open, or
+	// closing) while narrow -- used to collapse the main search/results content out of the way
+	// rather than have it squeezed alongside a Settings panel with nowhere to put it.
+	bool IsSettingsPanelTakingOverNarrowLayout() const
+	{
+		return bSettingsPanelNarrow && (SettingsPanelAnim.IsPlaying() || SettingsPanelCurve.GetLerp() > 0.0f);
+	}
 
 	// Embedded 3D preview shown at the top of the "More Info" panel.
 	TSharedPtr<SP4SearchModelViewport> CurrentModelViewport;

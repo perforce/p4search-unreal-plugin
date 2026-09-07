@@ -22,6 +22,8 @@
 #include "Engine/Texture2D.h"
 #include "Misc/FileHelper.h"
 #include "Modules/ModuleManager.h"
+#include "Animation/CurveSequence.h"
+#include "SP4SearchAnimatedButton.h"
 
 const FSlateBrush* SP4SearchResultCard::GetDownloadIconBrush()
 {
@@ -97,6 +99,13 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 	CardDepotFile = InArgs._DepotFile;
 	CardRev = Rev;
 	CardIsHead = InArgs._bIsHead;
+	bCardSupportsAddToProject = InArgs._bSupportsAddToProject;
+
+	// Staggered by 0.02s per card position so a page of results cascades in rather than every
+	// card moving in lockstep -- AppearCurve stays at 0 (SetRenderOpacity(0.0f) below, no visible
+	// slide via the RenderTransform lambda either) until this card's turn in the sequence.
+	const float AppearDelay = InArgs._AppearIndex * 0.02f;
+	AppearCurve = AppearAnim.AddCurve(AppearDelay, 0.3f, ECurveEaseFunction::CubicOut);
 
 	const float CardRadius = CardCornerRadius;
 	// Baked-in tint is neutral white — the outer SBorder's BorderBackgroundColor (below)
@@ -148,6 +157,15 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 		SNew(SBox)
 		.WidthOverride(192.0f) // 20% narrower than the original 240.0f
 		.Clipping(EWidgetClipping::ClipToBoundsAlways)
+		.RenderTransform_Lambda([this]() -> TOptional<FSlateRenderTransform>
+		{
+			// Slides down from 32px above its final position as AppearCurve runs 0 -> 1 --
+			// i.e. the card arrives travelling upward into place, alongside the fade driven
+			// by Tick() below (RenderOpacity is a plain float with no TAttribute/builder
+			// binding, unlike RenderTransform, so it can't be set declaratively here).
+			const float SlideOffset = (1.0f - AppearCurve.GetLerp()) * 32.0f;
+			return FSlateRenderTransform(FVector2D(0.0f, SlideOffset));
+		})
 		[
 			// Border ring (rounded) — tints to FStyleColors::Select and thickens while
 			// this card's "More Info" panel is open, back to a thin CardBorder ring otherwise.
@@ -192,7 +210,7 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 							]
 							+ SOverlay::Slot()
 							[
-								SAssignNew(HoverDetector, SButton)
+								SAssignNew(HoverDetector, SP4SearchAnimatedButton)
 								.ButtonStyle(&IconButtonStyle)
 								.ContentPadding(FMargin(0.0f))
 								.Cursor(EMouseCursor::Default)
@@ -275,7 +293,8 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 						.AutoWidth()
 						.VAlign(VAlign_Center)
 						[
-							SAssignNew(AddButton, SButton)
+							SAssignNew(AddButton, SP4SearchAnimatedButton)
+							.Visibility(bCardSupportsAddToProject ? EVisibility::Visible : EVisibility::Collapsed)
 							.ButtonStyle(&DownloadButtonStyle)
 							.ContentPadding(FMargin(4.0f))
 							.ToolTipText(FText::FromString(TEXT("Add to Project")))
@@ -301,7 +320,7 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 							SAssignNew(GenThumbContainer, SBox)
 							.Visibility(EVisibility::Collapsed)
 							[
-								SAssignNew(GenThumbButton, SButton)
+								SAssignNew(GenThumbButton, SP4SearchAnimatedButton)
 								.ButtonStyle(&IconButtonStyle)
 								.ContentPadding(FMargin(4.0f))
 								.ToolTipText(FText::FromString(TEXT("Generate EventGraph Thumbnail")))
@@ -333,6 +352,35 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 			]
 		]
 	];
+
+	SetRenderOpacity(0.0f); // Tick() below fades this back up to 1.0 once AppearAnim starts (OnPaint())
+}
+
+void SP4SearchResultCard::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+	if (AppearAnim.IsPlaying())
+	{
+		SetRenderOpacity(AppearCurve.GetLerp());
+	}
+}
+
+int32 SP4SearchResultCard::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+	FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	if (!bHasTriggeredAppearAnim)
+	{
+		bool bOverlapping = false;
+		MyCullingRect.IntersectionWith(AllottedGeometry.GetLayoutBoundingRect(), bOverlapping);
+		if (bOverlapping)
+		{
+			bHasTriggeredAppearAnim = true;
+			AppearAnim.Play(ConstCastSharedRef<SWidget>(AsShared()));
+		}
+	}
+
+	return SCompoundWidget::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 }
 
 SP4SearchResultCard::~SP4SearchResultCard()
