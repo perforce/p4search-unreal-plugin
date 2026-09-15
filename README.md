@@ -17,7 +17,7 @@ P4Search for Unreal Engine is an Unreal Editor plugin that brings [P4Search](htt
 * **Login-based auth** — in-Editor login panel.
 
 ## Requirements
-* Unreal Engine 5.5-5.9.
+* Unreal Engine 5.5-5.7.
 * Windows or macOS (Editor-only plugin — never loaded in packaged games).
 * A running [P4Search](https://www.perforce.com/products/p4search) server (`search-service`) to connect to.
 
@@ -50,7 +50,7 @@ This project is maintained by Perforce Engineering and fully supported. Pull req
 ## Usage
 ### Installing
 1. Find the "P4Search" listing on [Fab](https://www.fab.com) and click **Add to My Library** (or, from within the Unreal Editor, open the **Fab** tab and search for "P4Search").
-2. From your Fab library, click **Add to Project** and select the target Unreal project (5.5-5.9).
+2. From your Fab library, click **Add to Project** and select the target Unreal project (5.5-5.7).
 3. Launch the project's Editor. If the plugin isn't already enabled, go to **Edit > Plugins**, search for "P4Search", and enable it — the Editor will prompt to restart.
 4. Open the **P4Search** tab (Window > P4Search) and log in with your Perforce credentials against a running [P4Search](https://www.perforce.com/products/p4search) server.
 
