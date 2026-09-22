@@ -353,7 +353,7 @@ void FP4SearchModule::StartupModule()
 	FSlateApplication::Get().OnApplicationPreInputKeyDownListener().AddRaw(this, &FP4SearchModule::OnGlobalKeyDown);
 	FCoreDelegates::OnEnginePreExit.AddRaw(this, &FP4SearchModule::OnEnginePreExit);
 
-	for (const TCHAR* Ext : { TEXT("*"), TEXT("FBX"), TEXT("OBJ"), TEXT("GLB"), TEXT("USD"), TEXT("ABC"), TEXT("UASSET"), TEXT("JPEG"), TEXT("PNG"), TEXT("BMP") })
+	for (const TCHAR* Ext : { TEXT("*"), TEXT("FBX"), TEXT("OBJ"), TEXT("GLB"), TEXT("USD"), TEXT("ABC"), TEXT("UASSET"), TEXT("JPEG"), TEXT("PNG"), TEXT("BMP"), TEXT("WAV"), TEXT("MP3"), TEXT("OGG"), TEXT("FLAC"), TEXT("AIF"), TEXT("OPUS") })
 	{
 		ExtensionOptions.Add(MakeShareable(new FString(Ext)));
 	}
@@ -361,8 +361,9 @@ void FP4SearchModule::StartupModule()
 
 	// Sentinel values recognized by P4SearchCore::BuildSearchDslQuery, which expands each to
 	// every extension in that category -- see its own comment for the sync-with-this-file note.
-	AllThreeDOption = MakeShareable(new FString(TEXT("ALL3D")));
-	AllTwoDOption   = MakeShareable(new FString(TEXT("ALL2D")));
+	AllThreeDOption  = MakeShareable(new FString(TEXT("ALL3D")));
+	AllTwoDOption    = MakeShareable(new FString(TEXT("ALL2D")));
+	AllAudioOption   = MakeShareable(new FString(TEXT("ALLAUDIO")));
 
 	for (const TCHAR* Size : { TEXT("10"), TEXT("20"), TEXT("50"), TEXT("100") })
 	{
@@ -645,11 +646,12 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 	// ── Sidebar: file-type quick filters ────────────────────────────────────
 	// Built via a loop (one row per ExtensionOptions entry) rather than inline
 	// in the widget-tree below, since that only supports a fixed slot count.
-	// Every extension other than "*" (All Assets) is sorted into one of three
-	// expandable groups — 3D model formats, 2D images, or UASSET (Unreal's own
-	// generic asset container, not a 2D/3D format at all) — rather than one flat list.
+	// Every extension other than "*" (All Assets) is sorted into one of four
+	// expandable groups — 3D model formats, 2D images, UASSET (Unreal's own
+	// generic asset container, not a 2D/3D format at all), or audio — rather than one flat list.
 	static const TSet<FString> ThreeDExtensions = { TEXT("FBX"), TEXT("OBJ"), TEXT("GLB"), TEXT("USD"), TEXT("ABC") };
 	static const TSet<FString> UnrealExtensions = { TEXT("UASSET") };
+	static const TSet<FString> AudioExtensions  = { TEXT("WAV"), TEXT("MP3"), TEXT("OGG"), TEXT("FLAC"), TEXT("AIF"), TEXT("OPUS") };
 
 	// Icon + label content for the "All Assets" row and each expandable group's header — a
 	// small distinguishing glyph per top-level category, matching how most marketplace-style
@@ -686,6 +688,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 		const FString DisplayName = (*Opt == TEXT("*"))      ? TEXT("ALL ASSETS")
 			: (*Opt == TEXT("ALL3D")) ? TEXT("All 3D Assets")
 			: (*Opt == TEXT("ALL2D")) ? TEXT("All 2D Assets")
+			: (*Opt == TEXT("ALLAUDIO")) ? TEXT("All Audio Assets")
 			: *Opt;
 		return SNew(SBorder)
 			.BorderImage(FileTypeRowBrush.Get())
@@ -730,19 +733,22 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 	TSharedRef<SVerticalBox> ThreeDGroupList = SNew(SVerticalBox);
 	TSharedRef<SVerticalBox> TwoDGroupList = SNew(SVerticalBox);
 	TSharedRef<SVerticalBox> UnrealGroupList = SNew(SVerticalBox);
+	TSharedRef<SVerticalBox> AudioGroupList = SNew(SVerticalBox);
 
-	// Icons for the four top-level categories only — leaf extensions (FBX, PNG, etc.) stay
+	// Icons for the five top-level categories only — leaf extensions (FBX, PNG, etc.) stay
 	// text-only, matching the reference. Custom-drawn glyphs (see P4SearchStyle.cpp) rather
 	// than borrowed Editor icons, so each one actually fits its category.
 	const FSlateBrush* AllAssetsIcon = FP4SearchStyle::Get().GetBrush("P4Search.Icon.AllAssets");
 	const FSlateBrush* ThreeDIcon    = FP4SearchStyle::Get().GetBrush("P4Search.Icon.3D");
 	const FSlateBrush* TwoDIcon      = FP4SearchStyle::Get().GetBrush("P4Search.Icon.2D");
 	const FSlateBrush* UnrealIcon    = FP4SearchStyle::Get().GetBrush("P4Search.Icon.Unreal");
+	const FSlateBrush* AudioIcon     = FP4SearchStyle::Get().GetBrush("P4Search.Icon.Audio");
 
-	// "All 3D/2D Assets" pseudo-options sit above that group's individual extensions, matching
-	// how "*" (All Assets) sits above every group at the top level.
+	// "All 3D/2D/Audio Assets" pseudo-options sit above that group's individual extensions,
+	// matching how "*" (All Assets) sits above every group at the top level.
 	ThreeDGroupList->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(AllThreeDOption) ];
 	TwoDGroupList->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(AllTwoDOption) ];
+	AudioGroupList->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(AllAudioOption) ];
 
 	for (const TSharedPtr<FString>& Opt : ExtensionOptions)
 	{
@@ -754,6 +760,7 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 
 		TSharedRef<SVerticalBox>& TargetGroup = ThreeDExtensions.Contains(*Opt) ? ThreeDGroupList
 			: UnrealExtensions.Contains(*Opt) ? UnrealGroupList
+			: AudioExtensions.Contains(*Opt) ? AudioGroupList
 			: TwoDGroupList;
 		TargetGroup->AddSlot().AutoHeight().Padding(0.0f, 1.0f) [ MakeExtensionRow(Opt) ];
 	}
@@ -786,6 +793,10 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 	FileTypeList->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
 	[
 		MakeExtensionGroup(UnrealIcon, LOCTEXT("FileTypeGroupUnreal", "Unreal"), UnrealGroupList)
+	];
+	FileTypeList->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
+	[
+		MakeExtensionGroup(AudioIcon, LOCTEXT("FileTypeGroupAudio", "Audio"), AudioGroupList)
 	];
 
 	TSharedRef<SWidget> Sidebar =

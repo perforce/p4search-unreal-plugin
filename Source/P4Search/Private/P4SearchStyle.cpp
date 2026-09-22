@@ -56,6 +56,7 @@ TSharedRef< FSlateStyleSet > FP4SearchStyle::Create()
 	Style->Set("P4Search.Icon.3D",        new IMAGE_BRUSH_SVG(TEXT("icon-3d"),         Icon16x16));
 	Style->Set("P4Search.Icon.2D",        new IMAGE_BRUSH_SVG(TEXT("icon-2d"),         Icon16x16));
 	Style->Set("P4Search.Icon.Unreal",    new IMAGE_BRUSH_SVG(TEXT("icon-unreal"),     Icon16x16));
+	Style->Set("P4Search.Icon.Audio",     new IMAGE_BRUSH_SVG(TEXT("icon-audio"),      Icon16x16));
 
 	return Style;
 }

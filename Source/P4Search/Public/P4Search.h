@@ -179,6 +179,7 @@ private:
 	// every other row in ExtensionOptions already works.
 	TSharedPtr<FString> AllThreeDOption;
 	TSharedPtr<FString> AllTwoDOption;
+	TSharedPtr<FString> AllAudioOption;
 
 	TArray<TSharedPtr<FString>> PageSizeOptions;
 	TSharedPtr<FString> SelectedPageSize;

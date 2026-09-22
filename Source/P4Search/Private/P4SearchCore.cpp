@@ -36,11 +36,11 @@ namespace P4SearchCore
 		SearchQuery += TEXT("+model: asset");
 		if (!bAllTypes)
 		{
-			// "ALL3D"/"ALL2D" are sidebar pseudo-options, not real extensions (see
-			// AllThreeDOption/AllTwoDOption in P4Search.h) -- each expands to every extension in
-			// that category, space-separated, matching the DSL grammar's `ext:` rule (ext :
-			// 'ext' COLON (value)+), which ORs multiple values. Keep this pair in sync with
-			// P4Search.cpp's ThreeDExtensions set and the 2D group's exclusion list.
+			// "ALL3D"/"ALL2D"/"ALLAUDIO" are sidebar pseudo-options, not real extensions (see
+			// AllThreeDOption/AllTwoDOption/AllAudioOption in P4Search.h) -- each expands to every
+			// extension in that category, space-separated, matching the DSL grammar's `ext:` rule
+			// (ext : 'ext' COLON (value)+), which ORs multiple values. Keep this trio in sync with
+			// P4Search.cpp's ThreeDExtensions/AudioExtensions sets and the 2D group's exclusion list.
 			FString ExtToken;
 			bool bMultiValueExt = false;
 			if (Ext == TEXT("ALL3D"))
@@ -51,6 +51,11 @@ namespace P4SearchCore
 			else if (Ext == TEXT("ALL2D"))
 			{
 				ExtToken = TEXT("jpeg png bmp");
+				bMultiValueExt = true;
+			}
+			else if (Ext == TEXT("ALLAUDIO"))
+			{
+				ExtToken = TEXT("wav mp3 ogg flac aif opus");
 				bMultiValueExt = true;
 			}
 			else

@@ -44,6 +44,10 @@ bool FP4SearchBuildSearchDslQueryTest::RunTest(const FString& Parameters)
 		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("ALL2D"), TEXT(""), TEXT(""), 0, 0, false),
 		TEXT("+model: asset ext:jpeg png bmp"));
 
+	TestEqual(TEXT("\"ALLAUDIO\" pseudo-option expands to every audio extension, unprefixed so ES ORs them"),
+		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("ALLAUDIO"), TEXT(""), TEXT(""), 0, 0, false),
+		TEXT("+model: asset ext:wav mp3 ogg flac aif opus"));
+
 	TestEqual(TEXT("Depot path prefixes the query"),
 		P4SearchCore::BuildSearchDslQuery(TEXT("//depot/foo"), TEXT("*"), TEXT(""), TEXT(""), 0, 0, false),
 		TEXT("+depotPath: //depot/foo +model: asset"));
