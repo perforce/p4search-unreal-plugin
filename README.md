@@ -1,25 +1,25 @@
-[![Support](https://img.shields.io/badge/Support-Official-green.svg)](mailto:support@perforce.com)
+<a href="mailto:support@perforce.com" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Support-Official-green.svg" alt="Support"></a>
 
-# P4Search for Unreal Engine
+# P4 Search for Unreal Engine
 
-P4Search for Unreal Engine is officially supported by Perforce. Pull requests will be managed by Perforce's engineering teams. We will do our best to acknowledge these in a timely manner based on available capacity. Issues will not be managed on GitHub. All issues should be recorded via Perforce's standard support process (https://www.perforce.com/support/request-support).
+P4 Search for Unreal Engine is officially supported by Perforce. Pull requests will be managed by Perforce's engineering teams. We will do our best to acknowledge these in a timely manner based on available capacity. Issues will not be managed on GitHub. All issues should be recorded by <a href="https://portal.perforce.com/s/contactsupport" target="_blank" rel="noopener noreferrer">logging a case</a> via Perforce's standard support process.
 
 ## Overview
-P4Search for Unreal Engine is an Unreal Editor plugin that brings [P4Search](https://www.perforce.com/products/p4search)'s full-text search and asset discovery directly into the Unreal Editor. Search, preview, and pull assets from a Helix Core (Perforce) depot indexed by P4Search — without leaving the Editor, and without a local `p4` CLI or Perforce credentials beyond an in-Editor login.
+P4 Search for Unreal Engine is an Unreal Editor plugin that brings <a href="https://help.perforce.com/helix-core/integrations-plugins/p4search/current/Content/P4Search/Home-p4search.html" target="_blank" rel="noopener noreferrer">P4 Search</a>'s full-text search and asset discovery directly into the Unreal Editor. Search, preview, and pull assets from a P4 depot indexed by P4 Search: without leaving the Editor, and without a local `p4` CLI or Perforce credentials beyond an in-Editor login.
 
-* **Search** — keyword/tag search with filters for file extension, depot path, date (relative presets or a calendar picker), file size range, and "head revision only".
-* **Result cards** — include full thumbnails, with a hover-preview filmstrip for animated/sequential assets.
-* **"More Info" panel** — full asset metadata, Perforce attributes (scene references, scene stats), and an embedded interactive 3D viewport for supported mesh formats.
-* **Add to Project** — download a depot asset straight into `Content/P4Search/`, with automatic Content Browser registration.
-* **Generate Thumbnail** — render and save a thumbnail back to Perforce for uasset files that don't have one yet (Blueprint graphs and static meshes are both supported).
-* **Multi-select & bulk actions** — select multiple results and add them to the project in one action.
-* **Drag-and-drop** — drag a result card out of the search tab to trigger the same download flow as "Add to Project".
-* **Login-based auth** — in-Editor login panel.
+* **Search**: keyword/tag search with filters for file extension, depot path, date (relative presets or a calendar picker), file size range, and "head revision only".
+* **Result cards**: include full thumbnails, with a hover-preview filmstrip for animated/sequential assets.
+* **"More Info" panel**: full asset metadata, Perforce attributes (scene references, scene stats), and an embedded interactive 3D viewport for supported mesh formats.
+* **Add to Project**: download a depot asset straight into `Content/P4Search/`, with automatic Content Browser registration.
+* **Generate Thumbnail**: render and save a thumbnail back to Perforce for uasset files that don't have one yet (Blueprint graphs and static meshes are both supported).
+* **Multi-select & bulk actions**: select multiple results and add them to the project in one action.
+* **Drag-and-drop**: drag a result card out of the search tab to trigger the same download flow as "Add to Project".
+* **Login-based auth**: in-Editor login panel.
 
 ## Requirements
 * Unreal Engine 5.5-5.7.
 * Windows or macOS (Editor-only plugin — never loaded in packaged games).
-* A running [P4Search](https://www.perforce.com/products/p4search) server (`search-service`) to connect to.
+* A running <a href="https://help.perforce.com/helix-core/integrations-plugins/p4search/current/Content/P4Search/Home-p4search.html" target="_blank" rel="noopener noreferrer">P4 Search</a> server (`search-service`) to connect to.
 
 ## Documentation
 ### Project structure
@@ -42,17 +42,17 @@ P4Search for Unreal Engine is an Unreal Editor plugin that brings [P4Search](htt
     └── build.sh / build-ci.bat       — local dev / CI build scripts
 
 ### Backend integration
-The plugin talks to a P4Search server exclusively over HTTPS — there is no direct Perforce connection and no bundled `p4` CLI dependency. Login exchanges credentials for a per-session JWT (kept in memory only, never persisted), which is then sent as a bearer token on every subsequent request for search, thumbnails, previews, attributes, and asset downloads.
+The plugin talks to a P4 Search server exclusively over HTTPS, there is no direct Perforce connection and no bundled `p4` CLI dependency. Login exchanges credentials for a per-session JWT (kept in memory only, never persisted), which is then sent as a bearer token on every subsequent request for search, thumbnails, previews, attributes, and asset downloads.
 
 ## Support
-This project is maintained by Perforce Engineering and fully supported. Pull requests will be managed by Perforce's engineering teams. We will do our best to acknowledge these in a timely manner based on available capacity. Issues will not be managed on GitHub. All issues should be recorded via Perforce's standard support process (https://www.perforce.com/support/request-support).
+This project is maintained by Perforce Engineering and fully supported. Pull requests will be managed by Perforce's engineering teams. We will do our best to acknowledge these in a timely manner based on available capacity. Issues will not be managed on GitHub. All issues should be recorded by <a href="https://portal.perforce.com/s/contactsupport" target="_blank" rel="noopener noreferrer">logging a case</a> via Perforce's standard support process.
 
 ## Usage
 ### Installing
-1. Find the "P4Search" listing on [Fab](https://www.fab.com) and click **Add to My Library** (or, from within the Unreal Editor, open the **Fab** tab and search for "P4Search").
+1. Find the "P4Search" listing on <a href="https://www.fab.com" target="_blank" rel="noopener noreferrer">Fab</a> and click **Add to My Library** (or, from within the Unreal Editor, open the **Fab** tab and search for "P4Search").
 2. From your Fab library, click **Add to Project** and select the target Unreal project (5.5-5.7).
 3. Launch the project's Editor. If the plugin isn't already enabled, go to **Edit > Plugins**, search for "P4Search", and enable it — the Editor will prompt to restart.
-4. Open the **P4Search** tab (Window > P4Search) and log in with your Perforce credentials against a running [P4Search](https://www.perforce.com/products/p4search) server.
+4. Open the **P4Search** tab (Window > P4Search) and log in with your Perforce credentials against a running <a href="https://help.perforce.com/helix-core/integrations-plugins/p4search/current/Content/P4Search/Home-p4search.html" target="_blank" rel="noopener noreferrer">P4 Search</a> server.
 
 ### Building from source
 Local development builds (macOS):

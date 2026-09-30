@@ -1,15 +1,15 @@
                             Release Notes for
-                       P4Search for Unreal Engine
+                       P4 Search for Unreal Engine
 
                           Version 2026.4
 
 Introduction
 
-	P4Search for Unreal Engine is an Unreal Editor plugin that brings P4Search's
+	P4 Search for Unreal Engine is an Unreal Editor plugin that brings P4 Search's
 	full-text search and asset discovery directly into the Unreal Editor. It lets
-	artists and designers search, preview, and pull assets from a Helix Core
-	(Perforce) depot indexed by P4Search — without leaving the Editor, and without
-	a local 'p4' CLI or Perforce credentials beyond an in-Editor login.
+	artists and designers search, preview, and pull assets from a P4 depot
+	indexed by P4 Search: without leaving the Editor, and without a local 'p4'
+	CLI or Perforce credentials beyond an in-Editor login.
 
 	Please send all feedback to support@perforce.com
 
@@ -22,13 +22,14 @@ Requirements
 	* Windows or macOS (this is an Editor-only plugin — it is never loaded in
 	  packaged games).
 
-	* A running P4Search server (search-service) to connect to.
+	* A running P4 Search server (search-service) to connect to.
 
 Documentation
 
 	See README.md (in this directory) for an overview of the plugin's features,
-	project structure, and backend integration. Additional P4Search product
-	documentation is available at https://www.perforce.com/products/p4search.
+	project structure, and backend integration. Additional P4 Search product
+	documentation is available at
+	https://help.perforce.com/helix-core/integrations-plugins/p4search/current/Content/P4Search/Home-p4search.html.
 
 Installation
 
@@ -37,7 +38,7 @@ Installation
 Known Limitations
 
 	* Ribbon hover-preview: the hover-preview filmstrip depends on a
-	  search-service endpoint that not every P4Search server deployment has yet.
+	  search-service endpoint that not every P4 Search server deployment has yet.
 	  If your server predates this feature, hovering a result card simply shows
 	  no filmstrip rather than failing.
 
