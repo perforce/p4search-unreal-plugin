@@ -1,4 +1,4 @@
-// Copyright Perforce Software, Inc. All Rights Reserved.
+// Copyright 2026 Perforce Software, Inc. All Rights Reserved.
 
 #include "SP4SearchModelViewportClient.h"
 #include "Components/StaticMeshComponent.h"

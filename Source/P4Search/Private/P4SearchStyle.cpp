@@ -1,4 +1,4 @@
-// Copyright Perforce Software, Inc. All Rights Reserved.
+// Copyright 2026 Perforce Software, Inc. All Rights Reserved.
 
 #include "P4SearchStyle.h"
 #include "Styling/SlateStyleRegistry.h"

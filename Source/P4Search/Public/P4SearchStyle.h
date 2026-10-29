@@ -1,4 +1,4 @@
-// Copyright Perforce Software, Inc. All Rights Reserved.
+// Copyright 2026 Perforce Software, Inc. All Rights Reserved.
 
 #pragma once
 
