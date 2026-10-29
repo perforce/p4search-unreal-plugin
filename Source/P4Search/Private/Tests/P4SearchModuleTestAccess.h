@@ -38,6 +38,22 @@ public:
 	static const FString& GetCachedJWT(const FP4SearchModule& Module) { return Module.CachedJWT; }
 	static const FString& GetCachedNonce(const FP4SearchModule& Module) { return Module.CachedNonce; }
 	static const FString& GetLoginUsername(const FP4SearchModule& Module) { return Module.LoginUsername; }
+
+	// Search-request accessors. Note ExecuteSearch early-returns unless bIsLoggedIn, so tests
+	// must call SetLoggedIn(Module, true) first. A stack-local FP4SearchModule has never run
+	// StartupModule, so SortOptions is empty and SelectedSortOption is null -- set the sort
+	// via SetSelectedSortOption rather than expecting a default.
+	static void ExecuteSearch(FP4SearchModule& Module) { Module.ExecuteSearch(); }
+	static void TriggerImmediateSearch(FP4SearchModule& Module) { Module.TriggerImmediateSearch(); }
+
+	static void SetSearchSize(FP4SearchModule& Module, int32 InSize) { Module.SearchSize = InSize; }
+	static void SetCurrentPage(FP4SearchModule& Module, int32 InPage) { Module.CurrentPage = InPage; }
+	static int32 GetCurrentPage(const FP4SearchModule& Module) { return Module.CurrentPage; }
+
+	static void SetSelectedSortOption(FP4SearchModule& Module, TSharedPtr<FString> InOption)
+	{
+		Module.SelectedSortOption = InOption;
+	}
 };
 
 #endif // WITH_AUTOMATION_TESTS

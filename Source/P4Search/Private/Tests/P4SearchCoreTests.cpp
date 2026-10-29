@@ -19,6 +19,44 @@ bool FP4SearchFormatFileSizeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchBuildSortParamTest, "P4Search.BuildSortParam",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchBuildSortParamTest::RunTest(const FString& Parameters)
+{
+	// "Relevance" must stay the first label: it is the combo's default, and mapping it to an
+	// empty parameter is what keeps the out-of-the-box request identical to a pre-sort client.
+	const TArray<FString>& Labels = P4SearchCore::GetSortOptionLabels();
+	TestEqual(TEXT("Relevance is the first (default) label"), Labels[0], FString(TEXT("Relevance")));
+	TestEqual(TEXT("Relevance means no sort parameter"), P4SearchCore::BuildSortParam(TEXT("Relevance")), FString());
+
+	TestEqual(TEXT("Newest Change"), P4SearchCore::BuildSortParam(TEXT("Newest Change")), FString(TEXT("change:desc")));
+	TestEqual(TEXT("Oldest Change"), P4SearchCore::BuildSortParam(TEXT("Oldest Change")), FString(TEXT("change:asc")));
+	TestEqual(TEXT("Largest"), P4SearchCore::BuildSortParam(TEXT("Largest")), FString(TEXT("fileSize:desc")));
+	TestEqual(TEXT("Smallest"), P4SearchCore::BuildSortParam(TEXT("Smallest")), FString(TEXT("fileSize:asc")));
+	TestEqual(TEXT("Name A-Z"), P4SearchCore::BuildSortParam(TEXT("Name A-Z")), FString(TEXT("fileName:asc")));
+	TestEqual(TEXT("Name Z-A"), P4SearchCore::BuildSortParam(TEXT("Name Z-A")), FString(TEXT("fileName:desc")));
+
+	// A stale label persisted by an older build must fall back to relevance rather than
+	// producing a malformed parameter the endpoint would reject with a 400.
+	TestEqual(TEXT("Unrecognized label falls back to no sort"), P4SearchCore::BuildSortParam(TEXT("Bogus")), FString());
+	TestEqual(TEXT("Empty label falls back to no sort"), P4SearchCore::BuildSortParam(TEXT("")), FString());
+
+	// Every label must map to something the endpoint accepts: the friendly alias, never a raw
+	// Elasticsearch path (the service rejects e.g. "fileName.keyword" with a 400).
+	for (const FString& Label : Labels)
+	{
+		const FString Param = P4SearchCore::BuildSortParam(Label);
+		TestFalse(FString::Printf(TEXT("'%s' does not use a raw ES path"), *Label), Param.Contains(TEXT(".keyword")));
+		if (!Param.IsEmpty())
+		{
+			TestTrue(FString::Printf(TEXT("'%s' specifies a direction"), *Label),
+				Param.EndsWith(TEXT(":asc")) || Param.EndsWith(TEXT(":desc")));
+		}
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchBuildSearchDslQueryTest, "P4Search.BuildSearchDslQuery",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
@@ -52,9 +90,9 @@ bool FP4SearchBuildSearchDslQueryTest::RunTest(const FString& Parameters)
 		P4SearchCore::BuildSearchDslQuery(TEXT("//depot/foo"), TEXT("*"), TEXT(""), TEXT(""), 0, 0, false),
 		TEXT("+depotPath: //depot/foo +model: asset"));
 
-	TestEqual(TEXT("Detected tag filter"),
+	TestEqual(TEXT("Search bar term uses the \"text\" DSL field"),
 		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("*"), TEXT("cat"), TEXT(""), 0, 0, false),
-		TEXT("+model: asset +detected: cat"));
+		TEXT("+model: asset +text: cat"));
 
 	TestEqual(TEXT("\"*\" detected value is treated as no filter"),
 		P4SearchCore::BuildSearchDslQuery(TEXT(""), TEXT("*"), TEXT("*"), TEXT(""), 0, 0, false),
@@ -339,6 +377,83 @@ bool FP4SearchExtractLoginAccessTokenTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("\"data\" present but no \"accessToken\""),
 		P4SearchCore::ExtractLoginAccessToken(TEXT("{\"data\":{\"refreshToken\":\"xyz\"}}")), TEXT(""));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchExtractUrlHostTest, "P4Search.ExtractUrlHost",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchExtractUrlHostTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("Scheme, port and path stripped"),
+		P4SearchCore::ExtractUrlHost(TEXT("https://host.example.com:1601/api/v1.4/login")), TEXT("host.example.com"));
+	TestEqual(TEXT("Short host name with port"), P4SearchCore::ExtractUrlHost(TEXT("https://myserver:1601")), TEXT("myserver"));
+	TestEqual(TEXT("No port or path"), P4SearchCore::ExtractUrlHost(TEXT("http://localhost")), TEXT("localhost"));
+	TestEqual(TEXT("No scheme"), P4SearchCore::ExtractUrlHost(TEXT("myserver:1601")), TEXT("myserver"));
+	TestEqual(TEXT("User-info dropped"), P4SearchCore::ExtractUrlHost(TEXT("https://user@host.example.com:1601")), TEXT("host.example.com"));
+	TestEqual(TEXT("IPv6 literal keeps its brackets"), P4SearchCore::ExtractUrlHost(TEXT("http://[::1]:1601/")), TEXT("[::1]"));
+	TestEqual(TEXT("Empty URL"), P4SearchCore::ExtractUrlHost(TEXT("")), TEXT(""));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchBuildLoginFailureMessageTest, "P4Search.BuildLoginFailureMessage",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchBuildLoginFailureMessageTest::RunTest(const FString& Parameters)
+{
+	auto Message = [](const TCHAR* URL, bool bGotResponse, int32 Code, bool bTimedOut)
+	{
+		return P4SearchCore::BuildLoginFailureMessage(URL, bGotResponse, Code, bTimedOut).ToString();
+	};
+
+	const FString ShortHttps = Message(TEXT("https://myserver:1601"), false, 0, false);
+	TestTrue(TEXT("https + short host name suggests the fully qualified name"), ShortHttps.Contains(TEXT("fully qualified")));
+	TestTrue(TEXT("...and names the host"), ShortHttps.Contains(TEXT("myserver")));
+
+	TestFalse(TEXT("https + fully qualified host doesn't suggest the fully qualified name"),
+		Message(TEXT("https://myserver.example.com:1601"), false, 0, false).Contains(TEXT("fully qualified")));
+	TestTrue(TEXT("...but does mention the certificate"),
+		Message(TEXT("https://myserver.example.com:1601"), false, 0, false).Contains(TEXT("certificate")));
+	TestFalse(TEXT("https://localhost isn't treated as a short host name"),
+		Message(TEXT("https://localhost:1601"), false, 0, false).Contains(TEXT("fully qualified")));
+	TestFalse(TEXT("Plain http doesn't mention certificates"),
+		Message(TEXT("http://localhost:1601"), false, 0, false).Contains(TEXT("certificate")));
+
+	TestTrue(TEXT("Timeout is reported as such"), Message(TEXT("https://myserver:1601"), false, 0, true).Contains(TEXT("timed out")));
+	TestTrue(TEXT("401 is reported as bad credentials"),
+		Message(TEXT("https://myserver.example.com"), true, 401, false).Contains(TEXT("username or password")));
+	TestTrue(TEXT("200 without a token points at the Server URL"),
+		Message(TEXT("https://myserver.example.com"), true, 200, false).Contains(TEXT("Server URL")));
+	TestTrue(TEXT("Other status codes include the code"),
+		Message(TEXT("https://myserver.example.com"), true, 503, false).Contains(TEXT("503")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchExtractLicenseStatusOkTest, "P4Search.ExtractLicenseStatusOk",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchExtractLicenseStatusOkTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("\"license\" entry reports SUCCESS"),
+		P4SearchCore::ExtractLicenseStatusOk(
+			TEXT("{\"data\":[{\"name\":\"p4-status\",\"status\":\"SUCCESS\"},")
+			TEXT("{\"name\":\"license\",\"status\":\"SUCCESS\"}]}")));
+
+	TestFalse(TEXT("\"license\" entry reports WARNING"),
+		P4SearchCore::ExtractLicenseStatusOk(TEXT("{\"data\":[{\"name\":\"license\",\"status\":\"WARNING\"}]}")));
+
+	TestFalse(TEXT("\"license\" entry reports FAIL"),
+		P4SearchCore::ExtractLicenseStatusOk(TEXT("{\"data\":[{\"name\":\"license\",\"status\":\"FAIL\"}]}")));
+
+	TestTrue(TEXT("Not JSON at all fails open"),
+		P4SearchCore::ExtractLicenseStatusOk(TEXT("not json")));
+
+	TestTrue(TEXT("Valid JSON but no \"data\" key fails open"),
+		P4SearchCore::ExtractLicenseStatusOk(TEXT("{\"foo\":\"bar\"}")));
+
+	TestTrue(TEXT("\"data\" present but no \"license\" entry fails open"),
+		P4SearchCore::ExtractLicenseStatusOk(TEXT("{\"data\":[{\"name\":\"p4-status\",\"status\":\"FAIL\"}]}")));
 
 	return true;
 }

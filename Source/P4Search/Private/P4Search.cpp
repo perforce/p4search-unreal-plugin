@@ -371,6 +371,12 @@ void FP4SearchModule::StartupModule()
 	}
 	SelectedPageSize = PageSizeOptions[1]; // "20", matches the default SearchSize
 
+	for (const FString& Label : P4SearchCore::GetSortOptionLabels())
+	{
+		SortOptions.Add(MakeShareable(new FString(Label)));
+	}
+	SelectedSortOption = SortOptions[0]; // "Relevance" -- server's own ordering, no sort param
+
 	// Rounded search-box style
 	const FSlateColor SearchBg       = FStyleColors::Input;
 	const FSlateColor SearchBgActive = FStyleColors::Hover;
@@ -532,6 +538,18 @@ void FP4SearchModule::StartupModule()
 		SelectedPageSize = PageSizeOptions[1];
 		SearchSize = FCString::Atoi(**SelectedPageSize);
 	}
+	// Persisted as the display label rather than the sort parameter: the label identifies the
+	// combo entry directly, so an unrecognized saved value can snap back to the default the
+	// same way the page size above does, with no reverse lookup.
+	FString SavedSortLabel;
+	GConfig->GetString(TEXT("P4Search"), TEXT("SortOption"), SavedSortLabel, GEditorPerProjectIni);
+	SelectedSortOption = nullptr;
+	for (auto& Opt : SortOptions)
+		if (*Opt == SavedSortLabel) { SelectedSortOption = Opt; break; }
+	if (!SelectedSortOption.IsValid())
+	{
+		SelectedSortOption = SortOptions[0];
+	}
 	// Deliberately not restoring a saved file-type filter here — the default search on
 	// every fresh Editor session should always be "All Assets", not whatever narrower
 	// extension filter happened to be selected last time.
@@ -597,6 +615,10 @@ void FP4SearchModule::ShutdownModule()
 	GConfig->SetInt   (TEXT("P4Search"), TEXT("SearchSize"),      SearchSize,       GEditorPerProjectIni);
 	GConfig->SetString(TEXT("P4Search"), TEXT("ServerURL"),  *ServerURL,  GEditorPerProjectIni);
 	GConfig->SetArray (TEXT("P4Search"), TEXT("SearchHistory"), SearchHistory, GEditorPerProjectIni);
+	if (SelectedSortOption.IsValid())
+	{
+		GConfig->SetString(TEXT("P4Search"), TEXT("SortOption"), **SelectedSortOption, GEditorPerProjectIni);
+	}
 
 	if (ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings"))
 	{
@@ -1356,6 +1378,54 @@ TSharedRef<SDockTab> FP4SearchModule::OnSpawnPluginTab(const FSpawnTabArgs& Spaw
 								.Text_Lambda([this]()
 								{
 									return FText::FromString(SelectedPageSize.IsValid() ? *SelectedPageSize : TEXT(""));
+								})
+								.Font(FP4SearchStyle::GetBodyFont())
+								.Justification(ETextJustify::Center)
+								.ColorAndOpacity(FStyleColors::Foreground)
+							]
+							]
+						]
+						+ SWrapBox::Slot()
+						.VAlign(VAlign_Center)
+						.Padding(16.0f, 0.0f, 8.0f, 0.0f)
+						[
+							SNew(STextBlock)
+							.Text(LOCTEXT("SortLabel", "Sort:"))
+							.Font(FontLabel)
+							.ColorAndOpacity(ColLabel)
+						]
+						+ SWrapBox::Slot()
+						[
+							SNew(SBox)
+							.WidthOverride(140.0f)
+							[
+							SNew(SComboBox<TSharedPtr<FString>>)
+							.ComboBoxStyle(&FilterComboStyle)
+							.OptionsSource(&SortOptions)
+							.InitiallySelectedItem(SelectedSortOption)
+							.OnSelectionChanged_Lambda([this](TSharedPtr<FString> NewValue, ESelectInfo::Type)
+							{
+								SelectedSortOption = NewValue;
+								if (SelectedSortOption.IsValid())
+								{
+									// Discrete selection, so search immediately. This also resets
+									// CurrentPage to 0 -- reordering invalidates the current page.
+									TriggerImmediateSearch();
+								}
+							})
+							.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
+							{
+								return SNew(STextBlock)
+									.Text(FText::FromString(*Item))
+									.Font(FP4SearchStyle::GetBodyFont())
+									.Justification(ETextJustify::Center)
+									.Margin(FMargin(6.0f, 3.0f));
+							})
+							[
+								SNew(STextBlock)
+								.Text_Lambda([this]()
+								{
+									return FText::FromString(SelectedSortOption.IsValid() ? *SelectedSortOption : TEXT(""));
 								})
 								.Font(FP4SearchStyle::GetBodyFont())
 								.Justification(ETextJustify::Center)
@@ -2573,9 +2643,18 @@ void FP4SearchModule::ExecuteSearch()
 
 	const FString EncodedQuery = FGenericPlatformHttp::UrlEncode(SearchQuery);
 	const int32 From = CurrentPage * SearchSize;
+	// Omitted entirely for "Relevance" so the request stays byte-identical to before this
+	// feature. The ':' and ',' separators are legal unencoded in a query value, but encoding
+	// them matches EncodedQuery above and removes any question about server-side decoding --
+	// expect %3A/%2C in the log line below.
+	const FString SortParam = P4SearchCore::BuildSortParam(
+		SelectedSortOption.IsValid() ? *SelectedSortOption : FString());
+	const FString SortSegment = SortParam.IsEmpty()
+		? FString()
+		: FString::Printf(TEXT("&sort=%s"), *FGenericPlatformHttp::UrlEncode(SortParam));
 	const FString SearchURL = FString::Printf(
-		TEXT("%s/api/v1.3/search/dsl?search=%s&from=%d&size=%d"),
-		*ServerURL, *EncodedQuery, From, SearchSize);
+		TEXT("%s/api/v1.3/search/dsl?search=%s&from=%d&size=%d%s"),
+		*ServerURL, *EncodedQuery, From, SearchSize, *SortSegment);
 	UE_LOG(LogTemp, Log, TEXT("P4Search: ExecuteSearch query='%s' url=%s"), *SearchQuery, *SearchURL);
 	Request->SetURL(SearchURL);
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
@@ -2833,6 +2912,24 @@ UTexture2D* FP4SearchModule::DecodeImageToTexture(const TArray<uint8>& ImageData
 	return Texture;
 }
 
+void FP4SearchModule::CheckLicenseStatus()
+{
+	auto Request = HttpRequester->CreateRequest();
+	Request->SetURL(ServerURL + TEXT("/api/v1.3/status"));
+	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *CachedJWT));
+	Request->OnProcessRequestComplete().BindLambda([this](FHttpRequestPtr, FHttpResponsePtr Response, bool bSuccess)
+	{
+		// A failed/unparseable check should never retroactively block thumbnails that have
+		// already shown fine — leave the optimistic default in place rather than flip it.
+		if (!bSuccess || !Response.IsValid() || Response->GetResponseCode() != 200)
+		{
+			return;
+		}
+		bHasDamOrSearchLicense = P4SearchCore::ExtractLicenseStatusOk(Response->GetContentAsString());
+	});
+	Request->ProcessRequest();
+}
+
 void FP4SearchModule::FetchThumbnail(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard)
 {
 	auto Request = HttpRequester->CreateRequest();
@@ -2871,6 +2968,14 @@ void FP4SearchModule::FetchThumbnail(const FString& DepotFile, int32 Rev, TWeakP
 			if (GetDefault<UP4SearchSettings>()->bAutoGenerateThumbnails && DepotFile.EndsWith(TEXT(".uasset"), ESearchCase::IgnoreCase))
 			{
 				GenerateThumbnail(DepotFile, Rev, WeakCard);
+			}
+
+			// Missing thumbnails are expected on an unlicensed/basic-index-only server (preview
+			// generation is a DAM/Search-licensed capability) -- flag it on the card itself
+			// rather than leaving the user to guess why cards never get a preview.
+			if (!bHasDamOrSearchLicense)
+			{
+				Card->SetLicenseBannerVisible(true);
 			}
 			return;
 		}
@@ -2999,8 +3104,14 @@ void FP4SearchModule::FetchRibbon(const FString& DepotFile, int32 Rev, TWeakPtr<
 
 			const TArray<FBox2f> FrameUVs = P4SearchCore::ComputeRibbonFrameUVs(Frames, SpriteWidth, SpriteHeight, Width, Height);
 
+			// ImageSize must be the per-frame DISPLAYED size (matching SpriteImage's own
+			// DesiredSizeOverride), not the full filmstrip texture's native Width/Height --
+			// RoundThumbnailBrushTopCorners' corner radius is computed relative to this brush's
+			// declared ImageSize, so sizing it to the whole multi-frame sheet (shown here via
+			// SetUVRegion as just one small slice) made the rounded corners render far smaller
+			// than the card's, effectively square.
 			TSharedPtr<FSlateDynamicImageBrush> Brush = MakeShareable(
-				new FSlateDynamicImageBrush(Texture, FVector2D((float)Width, (float)Height), FName(*(DepotFile + TEXT("_ribbon"))))
+				new FSlateDynamicImageBrush(Texture, FVector2D(192.0f, 108.0f), FName(*(DepotFile + TEXT("_ribbon"))))
 			);
 			RoundThumbnailBrushTopCorners(Brush.Get());
 			ThumbnailBrushes.Add(Brush);
@@ -3047,7 +3158,7 @@ void FP4SearchModule::FetchSceneRefs(const FString& DepotFile, int32 Rev)
 		// No dam_scene_refs set for this asset (or the fetch failed) — not an error.
 		if (!bSuccess || !Response.IsValid() || ResponseCode != 200)
 		{
-			SceneRefsDisplayText = TEXT("None");
+			SceneRefsDisplayText = bHasDamOrSearchLicense ? TEXT("None") : TEXT("DAM license required");
 			return;
 		}
 
@@ -3055,11 +3166,15 @@ void FP4SearchModule::FetchSceneRefs(const FString& DepotFile, int32 Rev)
 		TSharedRef<TJsonReader<TCHAR>> Reader = TJsonReaderFactory<TCHAR>::Create(Response->GetContentAsString());
 		if (!FJsonSerializer::Deserialize(Reader, RefsArray) || RefsArray.Num() == 0)
 		{
-			SceneRefsDisplayText = TEXT("None");
+			SceneRefsDisplayText = bHasDamOrSearchLicense ? TEXT("None") : TEXT("DAM license required");
 			return;
 		}
 
 		SceneRefsDisplayText = P4SearchCore::FormatSceneRefs(RefsArray);
+		if (SceneRefsDisplayText == TEXT("None") && !bHasDamOrSearchLicense)
+		{
+			SceneRefsDisplayText = TEXT("DAM license required");
+		}
 		UE_LOG(LogTemp, Log, TEXT("P4Search: FetchSceneRefs for '%s' — %s"), *DepotFile, *SceneRefsDisplayText);
 	});
 	Request->ProcessRequest();
@@ -3098,7 +3213,7 @@ void FP4SearchModule::FetchSceneStats(const FString& DepotFile, int32 Rev)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("P4Search: FetchSceneStats failed for '%s' — bSuccess=%d HTTP %d, body: %s"),
 				*DepotFile, bSuccess, ResponseCode, Response.IsValid() ? *Response->GetContentAsString().Left(300) : TEXT("<no response>"));
-			SceneStatsDisplayText = TEXT("None");
+			SceneStatsDisplayText = bHasDamOrSearchLicense ? TEXT("None") : TEXT("DAM license required");
 			return;
 		}
 
@@ -3108,11 +3223,15 @@ void FP4SearchModule::FetchSceneStats(const FString& DepotFile, int32 Rev)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("P4Search: FetchSceneStats JSON parse failed for '%s', body: %s"),
 				*DepotFile, *Response->GetContentAsString().Left(300));
-			SceneStatsDisplayText = TEXT("None");
+			SceneStatsDisplayText = bHasDamOrSearchLicense ? TEXT("None") : TEXT("DAM license required");
 			return;
 		}
 
 		SceneStatsDisplayText = P4SearchCore::FormatSceneStats(StatsJson.ToSharedRef());
+		if (SceneStatsDisplayText == TEXT("None") && !bHasDamOrSearchLicense)
+		{
+			SceneStatsDisplayText = TEXT("DAM license required");
+		}
 		UE_LOG(LogTemp, Log, TEXT("P4Search: FetchSceneStats for '%s' — %s, raw body: %s"),
 			*DepotFile, *SceneStatsDisplayText, *Response->GetContentAsString().Left(300));
 	});
@@ -4046,7 +4165,15 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 							return ModelPreviewStatus == EModelPreviewStatus::NotFound && !InfoPanelPreviewBrush.IsValid()
 								? EVisibility::Visible : EVisibility::Collapsed;
 						})
-						.Text(LOCTEXT("ModelNotFound", "No 3D model available for this asset"))
+						.Text_Lambda([this]() -> FText
+						{
+							// No thumbnail and no 3D model both loaded — on an unlicensed server,
+							// this is because preview generation never ran (it's a DAM/Search-
+							// licensed capability), not because this particular asset lacks one.
+							return bHasDamOrSearchLicense
+								? LOCTEXT("ModelNotFound", "No 3D model available for this asset")
+								: LOCTEXT("ModelNotFoundNoLicense", "DAM license required for 3D viewer");
+						})
 						.Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
 						.ColorAndOpacity(FStyleColors::Foreground)
 					]
@@ -4076,7 +4203,9 @@ void FP4SearchModule::ShowAssetInfoPanel(TWeakPtr<SP4SearchResultCard> WeakCard,
 			]
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Changelist"), FString::FromInt(Change)) ]
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("File Size"), FileSize) ]
-			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Detected Tags"), DetectedTags.IsEmpty() ? TEXT("No tags found") : DetectedTags) ]
+			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Detected Tags"), DetectedTags.IsEmpty()
+				? (bHasDamOrSearchLicense ? TEXT("No tags found") : TEXT("DAM license required"))
+				: DetectedTags) ]
 			+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Scene References"), TAttribute<FString>::CreateLambda([this]() { return SceneRefsDisplayText; })) ]
 				+ SVerticalBox::Slot().AutoHeight() [ MakeInfoRow(TEXT("Scene Stats"), TAttribute<FString>::CreateLambda([this]() { return SceneStatsDisplayText; })) ]
 			]
@@ -4410,12 +4539,13 @@ void FP4SearchModule::PerformLogin(const FString& Username, const FString& Passw
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Request->SetContentAsString(BodyStr);
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, Username](FHttpRequestPtr, FHttpResponsePtr Response, bool bSuccess)
+		[this, Username](FHttpRequestPtr HttpRequest, FHttpResponsePtr Response, bool bSuccess)
 	{
-		const int32 ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		const bool bGotResponse = bSuccess && Response.IsValid();
+		const int32 ResponseCode = bGotResponse ? Response->GetResponseCode() : 0;
 		FString Token;
 		FString Nonce;
-		if (bSuccess && ResponseCode == 200 && Response.IsValid())
+		if (bGotResponse && ResponseCode == 200)
 		{
 			// v1.4 login returns {"data": {"accessToken": "...", "refreshToken": "..."}}.
 			Token = P4SearchCore::ExtractLoginAccessToken(Response->GetContentAsString());
@@ -4423,10 +4553,30 @@ void FP4SearchModule::PerformLogin(const FString& Username, const FString& Passw
 			Nonce = Response->GetHeader(TEXT("X-Nonce-Token"));
 		}
 
+		const EHttpFailureReason FailureReason = HttpRequest.IsValid() ? HttpRequest->GetFailureReason() : EHttpFailureReason::None;
+		if (Token.IsEmpty())
+		{
+			// The platform's own error (e.g. the TLS certificate rejection) is already logged by
+			// LogHttp; this ties it to the login attempt and adds what the server said, if anything.
+			FString Detail;
+			if (bGotResponse)
+			{
+				const FString ServerMessage = P4SearchCore::ExtractJsonStatusMessage(Response->GetContentAsString());
+				Detail = FString::Printf(TEXT("HTTP %d: %s"), ResponseCode,
+					ServerMessage.IsEmpty() ? *Response->GetContentAsString().Left(500) : *ServerMessage);
+			}
+			else
+			{
+				Detail = FString::Printf(TEXT("no response (%s)"), LexToString(FailureReason));
+			}
+			UE_LOG(LogTemp, Warning, TEXT("P4Search: Login to %s failed — %s"), *ServerURL, *Detail);
+		}
+
 		FNotificationInfo Info(Token.IsEmpty()
-			? FText::Format(LOCTEXT("LoginFailed",  "Login failed (HTTP {0})"), FText::AsNumber(ResponseCode))
+			? P4SearchCore::BuildLoginFailureMessage(ServerURL, bGotResponse, ResponseCode, FailureReason == EHttpFailureReason::TimedOut)
 			: FText::Format(LOCTEXT("LoginSuccess", "Logged in as {0}"), FText::FromString(Username)));
-		Info.ExpireDuration = 4.0f;
+		// Failure messages carry a suggested fix, so leave them up long enough to read.
+		Info.ExpireDuration = Token.IsEmpty() ? 8.0f : 4.0f;
 		Info.bUseSuccessFailIcons = true;
 		FSlateNotificationManager::Get().AddNotification(Info);
 
@@ -4436,6 +4586,7 @@ void FP4SearchModule::PerformLogin(const FString& Username, const FString& Passw
 			CachedNonce   = Nonce;
 			LoginUsername = Username;
 			bIsLoggedIn   = true;
+			CheckLicenseStatus();
 
 			// The inline login panel (shown where results normally are) gives way to a
 			// real search now that we're logged in.
@@ -4471,6 +4622,7 @@ void FP4SearchModule::LogOut()
 	CachedJWT.Empty();
 	CachedNonce.Empty();
 	bIsLoggedIn = false;
+	bHasDamOrSearchLicense = true;
 
 	// The inline login panel takes over the results area next repaint — clear whatever
 	// was showing so stale cards don't linger underneath it.

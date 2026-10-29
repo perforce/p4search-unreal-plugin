@@ -23,6 +23,49 @@ namespace P4SearchCore
 		return FString::Printf(TEXT("%.1f MB"), Bytes / (1024.0 * 1024.0));
 	}
 
+	// Label -> /search/dsl 'sort' parameter. Field names here are the endpoint's friendly
+	// aliases, not raw Elasticsearch paths: the service maps e.g. fileName -> fileName.keyword
+	// and rejects the raw path, so "fileName.keyword" here would produce a 400.
+	// Keep in sync with GetSortOptionLabels below.
+	static const TMap<FString, FString>& GetSortParamsByLabel()
+	{
+		static const TMap<FString, FString> Map = {
+			{ TEXT("Relevance"),     TEXT("")               },
+			{ TEXT("Newest Change"), TEXT("change:desc")    },
+			{ TEXT("Oldest Change"), TEXT("change:asc")     },
+			{ TEXT("Largest"),       TEXT("fileSize:desc")  },
+			{ TEXT("Smallest"),      TEXT("fileSize:asc")   },
+			{ TEXT("Name A-Z"),      TEXT("fileName:asc")   },
+			{ TEXT("Name Z-A"),      TEXT("fileName:desc")  },
+		};
+		return Map;
+	}
+
+	const TArray<FString>& GetSortOptionLabels()
+	{
+		// Explicit order: a TMap's iteration order is unspecified, and the combo's first entry
+		// is the default, so it cannot be left to chance.
+		static const TArray<FString> Labels = {
+			TEXT("Relevance"),
+			TEXT("Newest Change"),
+			TEXT("Oldest Change"),
+			TEXT("Largest"),
+			TEXT("Smallest"),
+			TEXT("Name A-Z"),
+			TEXT("Name Z-A"),
+		};
+		return Labels;
+	}
+
+	FString BuildSortParam(const FString& Label)
+	{
+		if (const FString* Found = GetSortParamsByLabel().Find(Label))
+		{
+			return *Found;
+		}
+		return FString();
+	}
+
 	FString BuildSearchDslQuery(const FString& SearchDepotPath, const FString& Ext, const FString& SearchDetected,
 		const FString& SearchDate, int32 SizeFromMB, int32 SizeToMB, bool bHeadOnly)
 	{
@@ -72,7 +115,7 @@ namespace P4SearchCore
 		}
 		if (!SearchDetected.IsEmpty() && SearchDetected != TEXT("*"))
 		{
-			SearchQuery += FString::Printf(TEXT(" +detected: %s"), *SearchDetected);
+			SearchQuery += FString::Printf(TEXT(" +text: %s"), *SearchDetected);
 		}
 		if (!SearchDate.IsEmpty())
 		{
@@ -297,6 +340,130 @@ namespace P4SearchCore
 			}
 		}
 		return Token;
+	}
+
+	bool ExtractLicenseStatusOk(const FString& ResponseBody)
+	{
+		TSharedPtr<FJsonObject> Json = MakeShareable(new FJsonObject());
+		TSharedRef<TJsonReader<TCHAR>> Reader = TJsonReaderFactory<TCHAR>::Create(ResponseBody);
+		if (!FJsonSerializer::Deserialize(Reader, Json) || !Json.IsValid())
+		{
+			return true;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* DataArray = nullptr;
+		if (!Json->TryGetArrayField(TEXT("data"), DataArray) || !DataArray)
+		{
+			return true;
+		}
+
+		for (const TSharedPtr<FJsonValue>& Entry : *DataArray)
+		{
+			const TSharedPtr<FJsonObject>* EntryObj = nullptr;
+			if (!Entry.IsValid() || !Entry->TryGetObject(EntryObj) || !EntryObj)
+			{
+				continue;
+			}
+			FString Name;
+			(*EntryObj)->TryGetStringField(TEXT("name"), Name);
+			if (Name != TEXT("license"))
+			{
+				continue;
+			}
+			FString Status;
+			(*EntryObj)->TryGetStringField(TEXT("status"), Status);
+			return Status == TEXT("SUCCESS");
+		}
+
+		return true;
+	}
+
+	FString ExtractUrlHost(const FString& Url)
+	{
+		FString Rest = Url.TrimStartAndEnd();
+		int32 SchemeEnd = Rest.Find(TEXT("://"));
+		if (SchemeEnd != INDEX_NONE)
+		{
+			Rest.RightChopInline(SchemeEnd + 3);
+		}
+
+		int32 PathStart = INDEX_NONE;
+		Rest.FindChar(TEXT('/'), PathStart);
+		const FString Authority = PathStart == INDEX_NONE ? Rest : Rest.Left(PathStart);
+
+		// Drop any user-info ("user@host") — not expected in a Server URL, but it would
+		// otherwise be mistaken for part of the host.
+		int32 AtIndex = INDEX_NONE;
+		const FString HostPort = Authority.FindLastChar(TEXT('@'), AtIndex) ? Authority.RightChop(AtIndex + 1) : Authority;
+
+		if (HostPort.StartsWith(TEXT("[")))
+		{
+			int32 CloseBracket = INDEX_NONE;
+			return HostPort.FindChar(TEXT(']'), CloseBracket) ? HostPort.Left(CloseBracket + 1) : HostPort;
+		}
+
+		int32 PortStart = INDEX_NONE;
+		return HostPort.FindChar(TEXT(':'), PortStart) ? HostPort.Left(PortStart) : HostPort;
+	}
+
+	FText BuildLoginFailureMessage(const FString& ServerURL, bool bGotResponse, int32 ResponseCode, bool bTimedOut)
+	{
+		const FString Host = ExtractUrlHost(ServerURL);
+		const FText HostText = FText::FromString(Host.IsEmpty() ? ServerURL : Host);
+
+		if (!bGotResponse)
+		{
+			if (bTimedOut)
+			{
+				return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedTimedOut",
+					"Login failed: timed out connecting to {0}. Check the Server URL and that the server is running."),
+					HostText);
+			}
+
+			// A TLS certificate is issued for the server's full DNS name, so an https URL using a
+			// short name that only resolves via the local DNS search domain (e.g. "myserver"
+			// rather than "myserver.example.com") fails certificate validation before the
+			// request is ever sent. The HTTP module doesn't expose why a request failed beyond
+			// a coarse reason, so this is inferred from the URL rather than the error itself.
+			const bool bIsHttps = ServerURL.TrimStart().StartsWith(TEXT("https://"), ESearchCase::IgnoreCase);
+			const bool bIsShortHostName = !Host.IsEmpty() && !Host.Contains(TEXT("."))
+				&& !Host.StartsWith(TEXT("[")) && !Host.Equals(TEXT("localhost"), ESearchCase::IgnoreCase);
+			if (bIsHttps && bIsShortHostName)
+			{
+				return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedShortHostName",
+					"Login failed: couldn't connect securely to {0}. The server's certificate must match the host name, "
+					"so try the server's fully qualified name (e.g. {0}.example.com) in the Server URL."),
+					HostText);
+			}
+			if (bIsHttps)
+			{
+				return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedConnectionHttps",
+					"Login failed: couldn't connect to {0}. Check the Server URL, that the server is running, "
+					"and that its certificate is trusted and matches the host name."),
+					HostText);
+			}
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedConnection",
+				"Login failed: couldn't connect to {0}. Check the Server URL and that the server is running."),
+				HostText);
+		}
+
+		if (ResponseCode == 401)
+		{
+			return NSLOCTEXT("FP4SearchModule", "LoginFailedCredentials", "Login failed: incorrect username or password.");
+		}
+
+		if (ResponseCode == 200)
+		{
+			// A 200 without an access token in the body usually means the URL reached something
+			// other than a P4 Search server (a proxy or a different service on that port).
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedNoToken",
+				"Login failed: unexpected response from {0}. Check the Server URL points to a P4 Search server."),
+				HostText);
+		}
+
+		return FText::Format(NSLOCTEXT("FP4SearchModule", "LoginFailedHttpStatus",
+			"Login failed: the server returned HTTP {0}. See the Output Log for details."),
+			FText::AsNumber(ResponseCode));
 	}
 
 	void NormalizeYearMonth(int32& Year, int32& Month)

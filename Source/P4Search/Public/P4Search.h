@@ -56,6 +56,11 @@ private:
 	void TriggerDebouncedSearch();
 	void TriggerImmediateSearch();
 	void FetchThumbnail(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
+
+	// Fires once after a successful login to find out whether the server has a DAM or Search
+	// capability (LicenseStatus on the backend treats those as equivalent) -- the result gates
+	// the "you need a DAM license" notification FetchThumbnail shows on a missing thumbnail.
+	void CheckLicenseStatus();
 	void FetchRibbon(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
 
 	// Decodes arbitrary compressed image bytes (auto-detected format) into a new transient,
@@ -184,6 +189,13 @@ private:
 	TArray<TSharedPtr<FString>> PageSizeOptions;
 	TSharedPtr<FString> SelectedPageSize;
 
+	// Result ordering. Holds the display labels from P4SearchCore::GetSortOptionLabels();
+	// ExecuteSearch converts the selected label to the endpoint's 'sort' parameter via
+	// BuildSortParam. Persistent TSharedPtr<FString>s created once in StartupModule, since
+	// SelectedSortOption comparisons are by pointer -- same as PageSizeOptions above.
+	TArray<TSharedPtr<FString>> SortOptions;
+	TSharedPtr<FString> SelectedSortOption;
+
 	FString SearchDepotPath;
 
 	// Date filter — free-text entry (e.g. "pastWeek") plus an auxiliary dropdown
@@ -263,6 +275,10 @@ private:
 	FString LoginUsername;
 	FString LoginPassword;  // in-memory only, cleared immediately after each login attempt
 	bool bIsLoggedIn = false;
+
+	// Set by CheckLicenseStatus() after login; defaults to true (assume licensed) so a status
+	// check that hasn't completed yet, or fails, never blocks thumbnails on its own.
+	bool bHasDamOrSearchLicense = true;
 
 	bool bIsSearching = false;
 	bool bSearchFailed = false;

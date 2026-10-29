@@ -12,9 +12,10 @@ namespace GLTF
 	struct FNode;
 }
 
-// Pure, HTTP/Slate-free logic shared out of P4Search.cpp so it can be exercised by a standalone
-// test executable (see the P4SearchCoreTests Program target) for real code coverage measurement,
-// which isn't possible for logic living directly in an Editor-only module.
+// Pure, HTTP/Slate-free logic shared out of P4Search.cpp so it can be exercised by the
+// automation tests in Private/Tests without standing up the Editor-only module's UI.
+// These tests run in-Editor via Session Frontend > Automation; there is no standalone test
+// runner or headless target for this plugin.
 namespace P4SearchCore
 {
 	// Formats a byte count the way result cards/the "More Info" panel display file sizes.
@@ -24,6 +25,17 @@ namespace P4SearchCore
 	// filter state. Ext should already be resolved to a real extension or "*".
 	FString BuildSearchDslQuery(const FString& SearchDepotPath, const FString& Ext, const FString& SearchDetected,
 		const FString& SearchDate, int32 SizeFromMB, int32 SizeToMB, bool bHeadOnly);
+
+	// Sort combo labels, in display order. The first entry is the default and must remain
+	// "Relevance" -- BuildSortParam maps it to an empty string, so the out-of-the-box search
+	// keeps the server's relevance ordering.
+	const TArray<FString>& GetSortOptionLabels();
+
+	// Maps a sort combo label to the /search/dsl 'sort' query parameter value, e.g.
+	// "Largest" -> "fileSize:desc". Returns empty for "Relevance" and for any unrecognized
+	// label, so a stale persisted label falls back to relevance rather than producing a
+	// malformed parameter the server would reject.
+	FString BuildSortParam(const FString& Label);
 
 	// One parsed search-hit's display-ready fields, extracted from a /search/dsl hit's
 	// "_source" object.
@@ -87,6 +99,23 @@ namespace P4SearchCore
 	// Parses the v1.4 login endpoint's JSON body ({"data":{"accessToken":"...", ...}}). The
 	// nonce isn't part of this since it arrives as a response header, not the body.
 	FString ExtractLoginAccessToken(const FString& ResponseBody);
+
+	// Parses the /status endpoint's JSON body ({"data":[{"name":"license","status":"SUCCESS"},
+	// ...]}) and returns whether the "license" entry reports "SUCCESS" (the server has a DAM
+	// or Search capability — LicenseStatus on the backend treats those as equivalent). Fails
+	// open (returns true) if the body can't be parsed or has no "license" entry, so a
+	// malformed/unexpected status response never blocks thumbnails on its own.
+	bool ExtractLicenseStatusOk(const FString& ResponseBody);
+
+	// Host name portion of a URL, e.g. "https://host.example.com:1601/api" -> "host.example.com".
+	// IPv6 literals keep their brackets ("[::1]"). Returns empty if there's no host.
+	FString ExtractUrlHost(const FString& Url);
+
+	// Builds the notification text for a failed /login attempt, so the user can tell a
+	// connection/certificate problem apart from bad credentials or a server error.
+	// bGotResponse is false when the request never completed (DNS, refused, TLS failure...);
+	// ResponseCode is only meaningful when it's true.
+	FText BuildLoginFailureMessage(const FString& ServerURL, bool bGotResponse, int32 ResponseCode, bool bTimedOut);
 
 	// Carries month over/under into the year as needed after adding a delta.
 	void NormalizeYearMonth(int32& Year, int32& Month);
