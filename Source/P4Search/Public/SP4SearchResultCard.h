@@ -117,6 +117,11 @@ public:
 	/** Reveal the Generate Thumbnail button (hidden until asset class is known) */
 	void ShowGenerateThumbnailButton();
 
+	/** Shows/hides a banner across the top of the thumbnail explaining that this asset's
+	 *  thumbnail/preview needs a DAM (or Search) license — called from FetchThumbnail once
+	 *  a thumbnail fetch comes back empty on an unlicensed server. */
+	void SetLicenseBannerVisible(bool bVisible);
+
 	/** Called while an Add to Project / Generate Thumbnail download is in flight — shows a
 	 *  progress bar under the action icons. An unset Percent shows an indeterminate marquee
 	 *  (content length not yet known), matching the "More Info" panel's model-download bar. */
@@ -165,6 +170,7 @@ private:
 	TSharedPtr<SImage>  GenThumbButtonIcon;
 	TSharedPtr<SBox>    GenThumbContainer;
 	TSharedPtr<SCheckBox> MultiSelectCheckBox;
+	TSharedPtr<SBox>    LicenseBannerContainer;
 
 	TUniquePtr<FSlateRoundedBoxBrush> CardOuterBrush;
 	TUniquePtr<FSlateRoundedBoxBrush> CardInnerBrush;
@@ -179,6 +185,11 @@ private:
 	// otherwise its own opaque rectangular fill shows through underneath whichever
 	// thumbnail brush is on top once that brush's corners go transparent.
 	TUniquePtr<FSlateRoundedBoxBrush> ThumbnailWrapperBrush;
+
+	// Background of the "DAM license required" banner — rounded on top only, same radius as
+	// ThumbnailWrapperBrush, since the banner sits flush against the card's own rounded top
+	// edge (see Construct()'s license-banner overlay slot).
+	TUniquePtr<FSlateRoundedBoxBrush> LicenseBannerBrush;
 
 	FButtonStyle    ActionButtonStyle;
 	FButtonStyle    IconButtonStyle;      // must outlive Construct (SButton stores a raw pointer)

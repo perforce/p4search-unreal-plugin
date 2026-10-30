@@ -124,6 +124,7 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 	const FVector4 TopRoundingOnly(CardRadius, CardRadius, 0.0f, 0.0f);
 	ThumbnailWrapperBrush = MakeUnique<FSlateRoundedBoxBrush>(CardBg,  TopRoundingOnly);
 	InitialThumbnailBrush = MakeUnique<FSlateRoundedBoxBrush>(ThumbBg, TopRoundingOnly);
+	LicenseBannerBrush = MakeUnique<FSlateRoundedBoxBrush>(FStyleColors::Warning, TopRoundingOnly);
 	ActionButtonStyle = InArgs._ActionButtonStyle;
 
 	// ── Small transparent icon-button style (Download / Info / Generate) ──
@@ -239,6 +240,33 @@ void SP4SearchResultCard::Construct(const FArguments& InArgs)
 										StoredOnMultiSelectChanged.ExecuteIfBound(bNewSelected);
 									}
 								})
+							]
+
+							// "DAM license required" banner — spans the top of the thumbnail,
+							// toggled by SetLicenseBannerVisible() once FetchThumbnail finds this
+							// asset has no thumbnail on an unlicensed server. HitTestInvisible
+							// (not just Collapsed/Visible) while shown so it doesn't steal clicks
+							// from the HoverDetector button underneath it.
+							+ SOverlay::Slot()
+							.HAlign(HAlign_Fill)
+							.VAlign(VAlign_Top)
+							[
+								SAssignNew(LicenseBannerContainer, SBox)
+								.Visibility(EVisibility::Collapsed)
+								[
+									SNew(SBorder)
+									.BorderImage(LicenseBannerBrush.Get())
+									.HAlign(HAlign_Center)
+									.Padding(4.0f, 3.0f)
+									[
+										SNew(STextBlock)
+										.Text(NSLOCTEXT("P4Search", "CardLicenseBanner", "DAM license required for thumbnails"))
+										.Font(FP4SearchStyle::GetCaptionBoldFont())
+										.ColorAndOpacity(FLinearColor::Black)
+										.AutoWrapText(true)
+										.Justification(ETextJustify::Center)
+									]
+								]
 							]
 						]
 					]
@@ -481,6 +509,17 @@ void SP4SearchResultCard::ShowGenerateThumbnailButton()
 	if (GenThumbContainer.IsValid())
 	{
 		GenThumbContainer->SetVisibility(EVisibility::Visible);
+	}
+}
+
+void SP4SearchResultCard::SetLicenseBannerVisible(bool bVisible)
+{
+	if (LicenseBannerContainer.IsValid())
+	{
+		// HitTestInvisible rather than Visible — the banner is purely informational and sits
+		// above HoverDetector in the overlay, so it must not intercept the card's own click/
+		// hover handling underneath it.
+		LicenseBannerContainer->SetVisibility(bVisible ? EVisibility::HitTestInvisible : EVisibility::Collapsed);
 	}
 }
 
