@@ -30,6 +30,11 @@ public:
 		return Module.HandleAuthFailure(ResponseCode);
 	}
 
+	static void SavePreviewToPerforce(FP4SearchModule& Module, const FString& DepotFile, int32 Rev, const TArray<uint8>& JpegData)
+	{
+		Module.SavePreviewToPerforce(DepotFile, Rev, JpegData);
+	}
+
 	static void SetLoggedIn(FP4SearchModule& Module, bool bValue) { Module.bIsLoggedIn = bValue; }
 	static void SetCachedJWT(FP4SearchModule& Module, const FString& InJWT) { Module.CachedJWT = InJWT; }
 	static void SetCachedNonce(FP4SearchModule& Module, const FString& InNonce) { Module.CachedNonce = InNonce; }

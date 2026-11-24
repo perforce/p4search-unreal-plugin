@@ -86,6 +86,12 @@ private:
 	void AddToProject(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
 	void GenerateThumbnail(const FString& DepotFile, int32 Rev, TWeakPtr<SP4SearchResultCard> WeakCard);
 
+	// Saves a rendered JPEG back to Perforce as DepotFile#Rev's "preview" attribute via
+	// POST /update/preview (the server regenerates the derived thumb/blur attributes itself),
+	// then shows a notification with the outcome — including a specific message when the user
+	// lacks write access to the file (403).
+	void SavePreviewToPerforce(const FString& DepotFile, int32 Rev, const TArray<uint8>& JpegData);
+
 	// AddToProject imports via FAssetToolsModule::ImportAssets, which resolves a UFactory by
 	// file extension -- if no registered factory (including any disabled by this project's
 	// enabled plugins, e.g. USD/Alembic) claims an extension, "Add to Project" would just

@@ -117,6 +117,19 @@ namespace P4SearchCore
 	// ResponseCode is only meaningful when it's true.
 	FText BuildLoginFailureMessage(const FString& ServerURL, bool bGotResponse, int32 ResponseCode, bool bTimedOut);
 
+	// Builds a multipart/form-data body: each TextFields entry as a plain form field, followed by
+	// one file part (FileFieldName/FileName/FileContentType/FileData). Text is UTF-8 encoded, so
+	// non-ASCII depot paths survive. Send with Content-Type "multipart/form-data; boundary=<Boundary>";
+	// Boundary must not occur anywhere in the content (a fresh GUID is fine).
+	TArray<uint8> BuildMultipartFormBody(const FString& Boundary, const TArray<TPair<FString, FString>>& TextFields,
+		const FString& FileFieldName, const FString& FileName, const FString& FileContentType, const TArray<uint8>& FileData);
+
+	// Builds the notification text for a POST /update/preview attempt (saving a generated
+	// thumbnail back to Perforce as the file's "preview" attribute). Distinguishes the failures
+	// the user can act on: no write access to the file (403), a Helix Core server older than
+	// 2024.1 (412), and a P4 Search server too old to have the endpoint (404).
+	FText BuildPreviewSaveMessage(const FString& FileName, bool bGotResponse, int32 ResponseCode);
+
 	// Carries month over/under into the year as needed after adding a delta.
 	void NormalizeYearMonth(int32& Year, int32& Month);
 

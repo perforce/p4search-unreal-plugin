@@ -466,6 +466,62 @@ namespace P4SearchCore
 			FText::AsNumber(ResponseCode));
 	}
 
+	TArray<uint8> BuildMultipartFormBody(const FString& Boundary, const TArray<TPair<FString, FString>>& TextFields,
+		const FString& FileFieldName, const FString& FileName, const FString& FileContentType, const TArray<uint8>& FileData)
+	{
+		TArray<uint8> Body;
+		auto Append = [&Body](const FString& Text)
+		{
+			const FTCHARToUTF8 Utf8(*Text);
+			Body.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+		};
+
+		for (const TPair<FString, FString>& Field : TextFields)
+		{
+			Append(FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"),
+				*Boundary, *Field.Key, *Field.Value));
+		}
+
+		// The filename attribute is what makes the server treat this part as an uploaded file
+		// rather than a plain form field.
+		Append(FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n"),
+			*Boundary, *FileFieldName, *FileName, *FileContentType));
+		Body.Append(FileData);
+		Append(FString::Printf(TEXT("\r\n--%s--\r\n"), *Boundary));
+		return Body;
+	}
+
+	FText BuildPreviewSaveMessage(const FString& FileName, bool bGotResponse, int32 ResponseCode)
+	{
+		const FText FileText = FText::FromString(FileName);
+
+		if (!bGotResponse)
+		{
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbFailConnection",
+				"Failed to save thumbnail for '{0}': couldn't connect to the P4 Search server."), FileText);
+		}
+
+		switch (ResponseCode)
+		{
+		case 200:
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbOK",
+				"Thumbnail saved to Perforce for '{0}'"), FileText);
+		case 403:
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbFailNoWriteAccess",
+				"Failed to save thumbnail for '{0}': you don't have write access to this file in Perforce."), FileText);
+		case 404:
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbFailNoEndpoint",
+				"Failed to save thumbnail for '{0}': this P4 Search server doesn't support saving thumbnails. Upgrade P4 Search to use this feature."),
+				FileText);
+		case 412:
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbFailServerTooOld",
+				"Failed to save thumbnail for '{0}': saving thumbnails needs Helix Core server 2024.1 or later."), FileText);
+		default:
+			return FText::Format(NSLOCTEXT("FP4SearchModule", "GenThumbFail",
+				"Failed to save thumbnail for '{0}' (HTTP {1})"), FileText, FText::AsNumber(ResponseCode));
+		}
+	}
+
 	void NormalizeYearMonth(int32& Year, int32& Month)
 	{
 		while (Month < 1)

@@ -17,7 +17,7 @@ Introduction
 
 Requirements
 
-	* Unreal Engine 5.5-5.8.
+	* Unreal Engine 5.5-5.9.
 
 	* Windows or macOS (this is an Editor-only plugin — it is never loaded in
 	  packaged games).

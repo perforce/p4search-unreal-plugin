@@ -3506,7 +3506,7 @@ void FP4SearchModule::GenerateThumbnail(const FString& DepotFile, int32 Rev, TWe
 			: TOptional<float>());
 	});
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, AssetName, FileName, DepotFile, OutputPath, WeakCard](FHttpRequestPtr, FHttpResponsePtr Response, bool bSuccess)
+		[this, AssetName, FileName, DepotFile, Rev, OutputPath, WeakCard](FHttpRequestPtr, FHttpResponsePtr Response, bool bSuccess)
 	{
 		const int32 ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
 		if (auto C = WeakCard.Pin()) { C->SetDownloadIdle(); }
@@ -3530,7 +3530,7 @@ void FP4SearchModule::GenerateThumbnail(const FString& DepotFile, int32 Rev, TWe
 
 		TSharedRef<FTSTicker::FDelegateHandle> TickerHandleBox = MakeShared<FTSTicker::FDelegateHandle>();
 		*TickerHandleBox = FTSTicker::GetCoreTicker().AddTicker(
-			FTickerDelegate::CreateLambda([this, TickerHandleBox, AssetName, FileName, DepotFile, WeakCard](float) -> bool
+			FTickerDelegate::CreateLambda([this, TickerHandleBox, AssetName, FileName, DepotFile, Rev, WeakCard](float) -> bool
 			{
 				PendingAssetTickers.Remove(*TickerHandleBox);
 				if (IsEngineExitRequested()) return false;
@@ -3704,44 +3704,64 @@ void FP4SearchModule::GenerateThumbnail(const FString& DepotFile, int32 Rev, TWe
 				if (auto C = WeakCard.Pin()) { C->SetGenerated(); }
 
 				// ── Save thumbnail via p4search ────────────────────
-				// Sent directly from memory — no local p4 binary or temp file needed.
-				const FString EncodedAttrFile = FGenericPlatformHttp::UrlEncode(DepotFile);
-				const FString AttrURL = FString::Printf(
-					TEXT("%s/api/v1.3/content/attribute?file=%s"), *ServerURL, *EncodedAttrFile);
-
-				auto AttrRequest = HttpRequester->CreateRequest();
-				AttrRequest->SetVerb(TEXT("POST"));
-				AttrRequest->SetURL(AttrURL);
-				AttrRequest->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *CachedJWT));
-				AttrRequest->SetHeader(TEXT("X-Nonce-Token"), CachedNonce);
-				AttrRequest->SetHeader(TEXT("Content-Type"), TEXT("image/jpeg"));
-				AttrRequest->SetContent(PNGData);
-				AttrRequest->OnProcessRequestComplete().BindLambda(
-					[this, FileName](FHttpRequestPtr, FHttpResponsePtr AttrResponse, bool bAttrSuccess)
-				{
-					const int32 AttrCode = AttrResponse.IsValid() ? AttrResponse->GetResponseCode() : 0;
-					if (HandleAuthFailure(AttrCode))
-					{
-						return;
-					}
-
-					const bool  bAttrOk  = bAttrSuccess && AttrCode == 200;
-
-					FNotificationInfo Info(bAttrOk
-						? FText::Format(LOCTEXT("GenThumbOK",   "Thumbnail saved to Perforce for '{0}'"),
-						                FText::FromString(FileName))
-						: FText::Format(LOCTEXT("GenThumbFail", "Failed to save thumbnail for '{0}' (HTTP {1})"),
-						                FText::FromString(FileName), FText::AsNumber(AttrCode)));
-					Info.ExpireDuration = 4.0f;
-					Info.bUseSuccessFailIcons = true;
-					FSlateNotificationManager::Get().AddNotification(Info);
-				});
-				AttrRequest->ProcessRequest();
+				SavePreviewToPerforce(DepotFile, Rev, PNGData);
 
 				return false; // one-shot ticker
 			})
 		);
 		PendingAssetTickers.Add(*TickerHandleBox);
+	});
+	Request->ProcessRequest();
+}
+
+void FP4SearchModule::SavePreviewToPerforce(const FString& DepotFile, int32 Rev, const TArray<uint8>& JpegData)
+{
+	// Sent directly from memory — no local p4 binary or temp file needed. Writes the "preview"
+	// attribute on this exact revision; the server regenerates the derived thumb/blur
+	// attributes from it, so there's nothing to clear first. (The "content/attribute" endpoint
+	// this used to call was only ever proposed and never implemented server-side, so every
+	// save failed with a 404.)
+	const FString FileName  = FPaths::GetCleanFilename(DepotFile);
+	const FString Boundary  = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const TArray<TPair<FString, FString>> FormFields = {
+		{ TEXT("depotFile"), DepotFile },
+		{ TEXT("rev"), FString::FromInt(Rev) },
+	};
+
+	auto Request = HttpRequester->CreateRequest();
+	Request->SetVerb(TEXT("POST"));
+	Request->SetURL(ServerURL + TEXT("/api/v1.4/update/preview"));
+	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *CachedJWT));
+	Request->SetHeader(TEXT("X-Nonce-Token"), CachedNonce);
+	Request->SetHeader(TEXT("Content-Type"), FString::Printf(TEXT("multipart/form-data; boundary=%s"), *Boundary));
+	Request->SetContent(P4SearchCore::BuildMultipartFormBody(
+		Boundary, FormFields, TEXT("preview"), FPaths::GetBaseFilename(DepotFile) + TEXT(".jpg"), TEXT("image/jpeg"), JpegData));
+	Request->OnProcessRequestComplete().BindLambda(
+		[this, FileName, DepotFile, Rev](FHttpRequestPtr, FHttpResponsePtr Response, bool bSuccess)
+	{
+		const int32 ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		if (HandleAuthFailure(ResponseCode))
+		{
+			return;
+		}
+
+		const bool bGotResponse = bSuccess && Response.IsValid();
+		const bool bOk          = bGotResponse && ResponseCode == 200;
+		if (bOk)
+		{
+			UE_LOG(LogTemp, Log, TEXT("P4Search: thumbnail saved — DepotFile='%s' Rev=%d"), *DepotFile, Rev);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("P4Search: saving thumbnail failed — DepotFile='%s' Rev=%d HTTP=%d Body=%s"),
+				*DepotFile, Rev, ResponseCode,
+				Response.IsValid() ? *Response->GetContentAsString().Left(500) : TEXT("<no response>"));
+		}
+
+		FNotificationInfo Info(P4SearchCore::BuildPreviewSaveMessage(FileName, bGotResponse, ResponseCode));
+		Info.ExpireDuration = bOk ? 4.0f : 8.0f;
+		Info.bUseSuccessFailIcons = true;
+		FSlateNotificationManager::Get().AddNotification(Info);
 	});
 	Request->ProcessRequest();
 }

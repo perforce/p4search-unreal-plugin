@@ -430,6 +430,56 @@ bool FP4SearchBuildLoginFailureMessageTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchBuildMultipartFormBodyTest, "P4Search.BuildMultipartFormBody",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchBuildMultipartFormBodyTest::RunTest(const FString& Parameters)
+{
+	const TArray<uint8> FileData = { 0xFF, 0xD8, 0x00, 0xFF, 0xD9 }; // includes a NUL byte to prove the file part is copied raw
+	const TArray<TPair<FString, FString>> Fields = {
+		{ TEXT("depotFile"), TEXT("//depot/été/Hero.uasset") },
+		{ TEXT("rev"), TEXT("3") },
+	};
+	const TArray<uint8> Body = P4SearchCore::BuildMultipartFormBody(
+		TEXT("XYZ"), Fields, TEXT("preview"), TEXT("Hero.jpg"), TEXT("image/jpeg"), FileData);
+
+	const FString Head = TEXT("--XYZ\r\nContent-Disposition: form-data; name=\"depotFile\"\r\n\r\n//depot/été/Hero.uasset\r\n")
+		TEXT("--XYZ\r\nContent-Disposition: form-data; name=\"rev\"\r\n\r\n3\r\n")
+		TEXT("--XYZ\r\nContent-Disposition: form-data; name=\"preview\"; filename=\"Hero.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+	const FString Tail = TEXT("\r\n--XYZ--\r\n");
+
+	TArray<uint8> Expected;
+	const FTCHARToUTF8 HeadUtf8(*Head);
+	Expected.Append(reinterpret_cast<const uint8*>(HeadUtf8.Get()), HeadUtf8.Length());
+	Expected.Append(FileData);
+	const FTCHARToUTF8 TailUtf8(*Tail);
+	Expected.Append(reinterpret_cast<const uint8*>(TailUtf8.Get()), TailUtf8.Length());
+
+	TestEqual(TEXT("Body length"), Body.Num(), Expected.Num());
+	TestTrue(TEXT("Text fields are UTF-8, file bytes are copied raw, and the closing boundary ends the body"), Body == Expected);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchBuildPreviewSaveMessageTest, "P4Search.BuildPreviewSaveMessage",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FP4SearchBuildPreviewSaveMessageTest::RunTest(const FString& Parameters)
+{
+	auto Message = [](bool bGotResponse, int32 Code)
+	{
+		return P4SearchCore::BuildPreviewSaveMessage(TEXT("Hero.uasset"), bGotResponse, Code).ToString();
+	};
+
+	TestTrue(TEXT("200 reports success"), Message(true, 200).Contains(TEXT("saved to Perforce")));
+	TestTrue(TEXT("...and names the file"), Message(true, 200).Contains(TEXT("Hero.uasset")));
+	TestTrue(TEXT("403 is reported as missing write access"), Message(true, 403).Contains(TEXT("write access")));
+	TestTrue(TEXT("404 points at upgrading P4 Search"), Message(true, 404).Contains(TEXT("Upgrade P4 Search")));
+	TestTrue(TEXT("412 names the minimum Helix Core version"), Message(true, 412).Contains(TEXT("2024.1")));
+	TestTrue(TEXT("No response is reported as a connection failure"), Message(false, 0).Contains(TEXT("couldn't connect")));
+	TestTrue(TEXT("Other status codes include the code"), Message(true, 500).Contains(TEXT("500")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FP4SearchExtractLicenseStatusOkTest, "P4Search.ExtractLicenseStatusOk",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
